@@ -99,10 +99,7 @@ npm run build: web
 `dist/` に出力されます。Cloudflare Pages などの静的ホスティングにそのままデプロイできます。
 
 ### テストを実行する
-
-```bash
-npm test
-```
+botのロジックを調整するために設けたもので、AIに大量に試させる内容になっています。ローカルで実行するとえらく時間がかかります。
 
 ### 対応ブラウザ
 
@@ -150,7 +147,7 @@ goldbach-cardgame/
 │   │   ├── mathUtils.ts       # GCD・素数判定・互いに素判定
 │   │   ├── rules.ts           # カード出しの合法手判定
 │   │   ├── engine.ts          # ゲーム進行・ターン管理・勝敗判定
-│   │   ├── bot.ts             # ボットAIの行動選択
+│   │   ├── bot.ts             # ボットの行動選択
 │   │   └── counterHeuristic.ts
 │   │
 │   ├── screens/

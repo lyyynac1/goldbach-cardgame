@@ -49,7 +49,7 @@ export function ColumnModal({ visible, onClose }: { visible: boolean; onClose: (
           <View style={styles.linkSection}>
             <Pressable onPress={handleGitHubPress} style={[styles.githubLink, { borderColor: theme.colors.border }]}>
               <Text style={[styles.githubLinkText, { color: theme.colors.accentGold, fontFamily: theme.typography.body.fontFamily }]}>
-                ソースコードを見る (GitHub)
+                細説・ソースコード (GitHub)
               </Text>
             </Pressable>
           </View>
