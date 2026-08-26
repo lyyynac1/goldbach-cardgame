@@ -10,10 +10,8 @@
       "package": "com.goldbach.cardgame",
       "versionCode": 1,
       "adaptiveIcon": {
-        "backgroundColor": "#FAF6EE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "backgroundColor": "#1D3E5F",
+        "foregroundImage": "./assets/android-icon-foreground.png"
       },
       "predictiveBackGestureEnabled": false
     },
