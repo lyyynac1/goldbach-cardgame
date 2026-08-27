@@ -28,7 +28,8 @@
             "minSdkVersion": 24
           }
         }
-      ]
+      ],
+      "./plugins/withReleaseSigning.js"
     ]
   }
 }
