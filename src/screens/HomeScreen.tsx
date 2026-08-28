@@ -2,14 +2,23 @@ import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useTheme } from "../ThemeContext";
 import { Difficulty } from "../engine/bot";
-import { PlayerConfig, HUMAN_PLAYER_ID, GAMES_PER_SET } from "../state/useGameSession";
+import {
+  PlayerConfig,
+  HUMAN_PLAYER_ID,
+  GAMES_PER_SET,
+} from "../state/useGameSession";
 import { RulesModal } from "../components/RulesModal";
 import { TrophyListModal } from "../components/TrophyListModal";
 import { ColumnModal } from "../components/ColumnModal";
+import { CreditsModal } from "../components/CreditsModal";
 import { TrophyEngine } from "../trophies/useTrophyEngine";
 
 const DIFFICULTIES: Difficulty[] = ["easy", "medium", "hard"];
-const DIFFICULTY_LABEL: Record<Difficulty, string> = { easy: "初級", medium: "中級", hard: "上級" };
+const DIFFICULTY_LABEL: Record<Difficulty, string> = {
+  easy: "初級",
+  medium: "中級",
+  hard: "上級",
+};
 
 interface HomeScreenProps {
   onStart: (players: PlayerConfig[]) => void;
@@ -18,11 +27,17 @@ interface HomeScreenProps {
   onBotDifficultiesChange: (difficulties: Difficulty[]) => void;
 }
 
-export function HomeScreen({ onStart, trophyEngine, botDifficulties, onBotDifficultiesChange }: HomeScreenProps) {
+export function HomeScreen({
+  onStart,
+  trophyEngine,
+  botDifficulties,
+  onBotDifficultiesChange,
+}: HomeScreenProps) {
   const theme = useTheme();
   const [rulesVisible, setRulesVisible] = React.useState(false);
   const [trophiesVisible, setTrophiesVisible] = React.useState(false);
   const [columnVisible, setColumnVisible] = React.useState(false);
+  const [creditsVisible, setCreditsVisible] = React.useState(false);
 
   const cycleDifficulty = (index: number) => {
     const next = [...botDifficulties];
@@ -34,17 +49,40 @@ export function HomeScreen({ onStart, trophyEngine, botDifficulties, onBotDiffic
   const handleStart = () => {
     const players: PlayerConfig[] = [
       { id: HUMAN_PLAYER_ID, name: "あなた", isBot: false, difficulty: "easy" },
-      ...botDifficulties.map((d, i) => ({ id: i + 1, name: `b${i + 1}`, isBot: true, difficulty: d })),
+      ...botDifficulties.map((d, i) => ({
+        id: i + 1,
+        name: `b${i + 1}`,
+        isBot: true,
+        difficulty: d,
+      })),
     ];
     onStart(players);
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
-      <Text style={[styles.title, { color: theme.colors.textPrimary, fontFamily: theme.typography.display.fontFamily }]}>
+    <View
+      style={[styles.container, { backgroundColor: theme.colors.background }]}
+    >
+      <Text
+        style={[
+          styles.title,
+          {
+            color: theme.colors.textPrimary,
+            fontFamily: theme.typography.display.fontFamily,
+          },
+        ]}
+      >
         ゴールドバッハ
       </Text>
-      <Text style={[styles.subtitle, { color: theme.colors.textSecondary, fontFamily: theme.typography.body.fontFamily }]}>
+      <Text
+        style={[
+          styles.subtitle,
+          {
+            color: theme.colors.textSecondary,
+            fontFamily: theme.typography.body.fontFamily,
+          },
+        ]}
+      >
         {GAMES_PER_SET}ゲーム1セット・数論カードゲーム
       </Text>
 
@@ -55,49 +93,133 @@ export function HomeScreen({ onStart, trophyEngine, botDifficulties, onBotDiffic
             onPress={() => cycleDifficulty(i)}
             style={[styles.botRow, { borderColor: theme.colors.border }]}
           >
-            <Text style={{ color: theme.colors.textPrimary, fontFamily: theme.typography.body.fontFamily, fontSize: 23 }}>
+            <Text
+              style={{
+                color: theme.colors.textPrimary,
+                fontFamily: theme.typography.body.fontFamily,
+                fontSize: 23,
+              }}
+            >
               b{i + 1}
             </Text>
-            <View style={[styles.difficultyPill, { backgroundColor: theme.colors.accentTeal }]}>
-              <Text style={{ color: "#FFFDF8", fontFamily: theme.typography.body.fontFamily, fontSize: 20 }}>
+            <View
+              style={[
+                styles.difficultyPill,
+                { backgroundColor: theme.colors.accentTeal },
+              ]}
+            >
+              <Text
+                style={{
+                  color: "#FFFDF8",
+                  fontFamily: theme.typography.body.fontFamily,
+                  fontSize: 20,
+                }}
+              >
                 {DIFFICULTY_LABEL[d]}
               </Text>
             </View>
           </Pressable>
         ))}
-        <Text style={{ color: theme.colors.textSecondary, fontFamily: theme.typography.body.fontFamily, fontSize: 18, marginTop: 6 }}>
+        <Text
+          style={{
+            color: theme.colors.textSecondary,
+            fontFamily: theme.typography.body.fontFamily,
+            fontSize: 18,
+            marginTop: 6,
+          }}
+        >
           タップで強さを切り替え
         </Text>
       </View>
 
       <Pressable
         onPress={handleStart}
-        style={[styles.startButton, { backgroundColor: theme.colors.accentGold, borderRadius: theme.radius.control }]}
+        style={[
+          styles.startButton,
+          {
+            backgroundColor: theme.colors.accentGold,
+            borderRadius: theme.radius.control,
+          },
+        ]}
       >
-        <Text style={{ color: theme.colors.onAccentGold, fontFamily: theme.typography.body.fontFamily, fontSize: 24 }}>
+        <Text
+          style={{
+            color: theme.colors.onAccentGold,
+            fontFamily: theme.typography.body.fontFamily,
+            fontSize: 24,
+          }}
+        >
           スタート
         </Text>
       </Pressable>
 
       <View style={styles.linkRow}>
-        <Pressable onPress={() => setRulesVisible(true)} style={styles.rulesLink} hitSlop={8}>
-          <Text style={{ color: theme.colors.textSecondary, fontFamily: theme.typography.body.fontFamily, fontSize: 20 }}>
+        <Pressable
+          onPress={() => setRulesVisible(true)}
+          style={styles.rulesLink}
+          hitSlop={8}
+        >
+          <Text
+            style={{
+              color: theme.colors.textSecondary,
+              fontFamily: theme.typography.body.fontFamily,
+              fontSize: 20,
+            }}
+          >
             ルール
           </Text>
         </Pressable>
-        <Pressable onPress={() => setTrophiesVisible(true)} style={styles.rulesLink} hitSlop={8}>
-          <Text style={{ color: theme.colors.textSecondary, fontFamily: theme.typography.body.fontFamily, fontSize: 20 }}>
+        <Pressable
+          onPress={() => setTrophiesVisible(true)}
+          style={styles.rulesLink}
+          hitSlop={8}
+        >
+          <Text
+            style={{
+              color: theme.colors.textSecondary,
+              fontFamily: theme.typography.body.fontFamily,
+              fontSize: 20,
+            }}
+          >
             トロフィー
           </Text>
         </Pressable>
-        <Pressable onPress={() => setColumnVisible(true)} style={styles.rulesLink} hitSlop={8}>
-          <Text style={{ color: theme.colors.textSecondary, fontFamily: theme.typography.body.fontFamily, fontSize: 20 }}>
+        <Pressable
+          onPress={() => setColumnVisible(true)}
+          style={styles.rulesLink}
+          hitSlop={8}
+        >
+          <Text
+            style={{
+              color: theme.colors.textSecondary,
+              fontFamily: theme.typography.body.fontFamily,
+              fontSize: 20,
+            }}
+          >
             コラム
+          </Text>
+        </Pressable>
+        <Pressable
+          onPress={() => setCreditsVisible(true)}
+          style={styles.rulesLink}
+          hitSlop={8}
+        >
+          <Text
+            style={{
+              color: theme.colors.textSecondary,
+              fontFamily: theme.typography.body.fontFamily,
+              fontSize: 20,
+            }}
+          >
+            クレジット
           </Text>
         </Pressable>
       </View>
 
-      <RulesModal visible={rulesVisible} onClose={() => setRulesVisible(false)} />
+      <RulesModal
+        visible={rulesVisible}
+        onClose={() => setRulesVisible(false)}
+      />
       <TrophyListModal
         visible={trophiesVisible}
         onClose={() => setTrophiesVisible(false)}
@@ -107,7 +229,14 @@ export function HomeScreen({ onStart, trophyEngine, botDifficulties, onBotDiffic
         totalSetsWon={trophyEngine.totalSetsWon}
         totalGamesWon={trophyEngine.totalGamesWon}
       />
-      <ColumnModal visible={columnVisible} onClose={() => setColumnVisible(false)} />
+      <ColumnModal
+        visible={columnVisible}
+        onClose={() => setColumnVisible(false)}
+      />
+      <CreditsModal
+        visible={creditsVisible}
+        onClose={() => setCreditsVisible(false)}
+      />
     </View>
   );
 }
