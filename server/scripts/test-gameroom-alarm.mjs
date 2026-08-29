@@ -8,7 +8,8 @@ function check(label, cond) {
   if (!cond) failures++;
 }
 
-const code = "ALARMTEST01";
+const createRes = await fetch("http://localhost:8787/room", { method: "POST" });
+const { code } = await createRes.json();
 const idleMs = 1500; // テストなので1.5秒に短縮
 
 const ws = new WebSocket(`ws://localhost:8787/room/${code}?testIdleMs=${idleMs}`);

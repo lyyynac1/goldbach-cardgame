@@ -23,7 +23,13 @@ function withTimeout(promise, ms, label) {
   return Promise.race([promise, new Promise((_, rej) => setTimeout(() => rej(new Error(`timeout: ${label}`)), ms))]);
 }
 
-const code = "INTEGTEST02";
+async function createRoom() {
+  const res = await fetch("http://localhost:8787/room", { method: "POST" });
+  const body = await res.json();
+  return body.code;
+}
+
+const code = await createRoom();
 
 // ---- 座席割当: 順に接続した3人が座席0,1,2を受け取る ----
 const a = await connect(code);

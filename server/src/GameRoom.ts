@@ -16,6 +16,9 @@ const ONLINE_BOT_DIFFICULTY = "hard" as const;
 // 無通信が続いた部屋を自動破棄するまでの時間。申請書の目安(30分)をデフォルトにする。
 const DEFAULT_ROOM_IDLE_MS = 30 * 60 * 1000;
 
+// 対戦終了後、部屋を破棄するまでの猶予時間。結果画面を見る時間として少し余裕を持たせる。
+const GAME_END_GRACE_MS = 30 * 1000;
+
 /**
  * Durable Object 本実装。
  *
@@ -27,19 +30,47 @@ export class GameRoom {
   private seats: (WebSocket | null)[] = Array.from({ length: SEAT_COUNT }, () => null);
   private state: DurableObjectState;
   private idleMs: number = DEFAULT_ROOM_IDLE_MS;
+  private gameEndGraceMs: number = GAME_END_GRACE_MS;
 
   // ゲーム開始前は null。startRequest 受理時に initGame される。
   private gameState: GameState | null = null;
   // 座席ごとのbot判定。開始時に「その時点で人間が接続していない席」として確定する。
   private seatIsBot: boolean[] | null = null;
 
+  // POST /room (要件1,3) を経由して作成された部屋かどうか。storageに永続化し、
+  // DOインスタンスが再構築されても(idFromNameだけでは常にインスタンスが得られてしまうため)
+  // 「作成済みかどうか」をここで別途管理する(要件4)。
+  private created = false;
+
   constructor(state: DurableObjectState, _env: unknown) {
     this.state = state;
+    // コンストラクタは async にできないため、blockConcurrencyWhile で
+    // 「storageからcreatedフラグを読み終わるまで、このDOへの他のリクエストを待たせる」
+    // 標準パターンを使う。
+    this.state.blockConcurrencyWhile(async () => {
+      this.created = (await this.state.storage.get<boolean>("created")) === true;
+    });
   }
 
   async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+
+    // 内部専用: POST /room からのみ呼ばれる。このDOを「作成済み」として記録する。
+    if (url.pathname === "/__create" && request.method === "POST") {
+      if (!this.created) {
+        this.created = true;
+        await this.state.storage.put("created", true);
+      }
+      return new Response("ok", { status: 200 });
+    }
+
     if (request.headers.get("Upgrade") !== "websocket") {
       return new Response("Expected websocket upgrade", { status: 426 });
+    }
+
+    // 要件4: 作成済み(POST /room経由)の部屋にしか接続できない
+    if (!this.created) {
+      return new Response("Room not found", { status: 404 });
     }
 
     if (this.gameState !== null) {
@@ -52,9 +83,10 @@ export class GameRoom {
       return new Response("Room full", { status: 403 });
     }
 
-    const url = new URL(request.url);
     const testIdleMs = url.searchParams.get("testIdleMs");
     if (testIdleMs) this.idleMs = Number(testIdleMs);
+    const testGameEndGraceMs = url.searchParams.get("testGameEndGraceMs");
+    if (testGameEndGraceMs) this.gameEndGraceMs = Number(testGameEndGraceMs);
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
@@ -87,8 +119,13 @@ export class GameRoom {
         return;
       }
 
-      await this.bumpIdleAlarm();
-      this.handleValidMessage(seat, result.value);
+      // 対戦終了後は短い猶予タイマー(GAME_END_GRACE_MS)を優先する。
+      // ここで無条件に無通信タイマー(30分)へ戻してしまうと、終了後にping等が
+      // 届くたびに破棄が先延ばしになってしまうため。
+      if (!this.gameState?.finished) {
+        await this.bumpIdleAlarm();
+      }
+      await this.handleValidMessage(seat, result.value);
     });
 
     const cleanup = () => {
@@ -101,7 +138,7 @@ export class GameRoom {
     ws.addEventListener("error", cleanup);
   }
 
-  private handleValidMessage(fromSeat: SeatId, msg: ClientMessage) {
+  private async handleValidMessage(fromSeat: SeatId, msg: ClientMessage) {
     const ws = this.seats[fromSeat];
     if (!ws) return;
 
@@ -119,18 +156,18 @@ export class GameRoom {
       }
 
       case "startRequest": {
-        this.handleStartRequest(fromSeat, ws);
+        await this.handleStartRequest(fromSeat, ws);
         return;
       }
 
       case "action": {
-        this.handleAction(fromSeat, ws, msg.action);
+        await this.handleAction(fromSeat, ws, msg.action);
         return;
       }
     }
   }
 
-  private handleStartRequest(fromSeat: SeatId, ws: WebSocket) {
+  private async handleStartRequest(fromSeat: SeatId, ws: WebSocket) {
     if (fromSeat !== HOST_SEAT) {
       this.sendError(ws, ErrorCode.NotHost);
       return;
@@ -150,10 +187,10 @@ export class GameRoom {
       0
     );
 
-    this.advanceAndBroadcast();
+    await this.advanceAndBroadcast();
   }
 
-  private handleAction(fromSeat: SeatId, ws: WebSocket, wireAction: WireAction) {
+  private async handleAction(fromSeat: SeatId, ws: WebSocket, wireAction: WireAction) {
     if (!this.gameState || !this.seatIsBot) {
       this.sendError(ws, ErrorCode.GameNotStarted);
       return;
@@ -186,7 +223,7 @@ export class GameRoom {
     }
 
     this.gameState = applyAction(this.gameState, fromSeat, action).state;
-    this.advanceAndBroadcast();
+    await this.advanceAndBroadcast();
   }
 
   /**
@@ -194,7 +231,7 @@ export class GameRoom {
    * 人間の手番が来るか対戦終了するまでサーバー側で自動的に進行させる。
    * 要件4: bot席の手番になったらサーバー側でchooseActionを実行し、適用・配信する。
    */
-  private advanceAndBroadcast() {
+  private async advanceAndBroadcast() {
     if (!this.gameState || !this.seatIsBot) return;
 
     // eslint-disable-next-line no-constant-condition
@@ -224,6 +261,11 @@ export class GameRoom {
     }
 
     this.broadcastState();
+
+    if (this.gameState.finished) {
+      // 対戦終了時は無通信タイマー(30分)を待たず、短い猶予(結果画面を見る時間)の後に破棄する
+      await this.state.storage.setAlarm(Date.now() + this.gameEndGraceMs);
+    }
   }
 
   private broadcastState() {
@@ -268,7 +310,11 @@ export class GameRoom {
     await this.state.storage.setAlarm(Date.now() + this.idleMs);
   }
 
-  /** 制約6: 無通信が一定時間続いた部屋を自動破棄する(Alarm APIによる実装)。 */
+  /**
+   * 制約6: 無通信が一定時間続いた部屋、または対戦終了から猶予時間が経過した部屋を
+   * 自動破棄する(Alarm APIによる実装)。永続化されたストレージも削除し、
+   * 以後この招待コードでの接続は「未作成の部屋」として404で拒否されるようにする。
+   */
   async alarm() {
     const closed: ServerMessage = { type: "roomClosed", code: ErrorCode.RoomClosed };
     const payload = JSON.stringify(closed);
@@ -279,10 +325,12 @@ export class GameRoom {
       } catch {
         // 既に切断済みなら無視
       }
-      ws.close(1000, "room idle timeout");
+      ws.close(1000, "room closed");
     }
     this.seats = Array.from({ length: SEAT_COUNT }, () => null);
     this.gameState = null;
     this.seatIsBot = null;
+    this.created = false;
+    await this.state.storage.deleteAll();
   }
 }

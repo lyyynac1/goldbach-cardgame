@@ -46,12 +46,21 @@ class QueuedSocket {
   }
 }
 
-function connect(code) {
+function connect(code, extraQuery = "") {
   return new Promise((resolve, reject) => {
-    const raw = new WebSocket(`ws://localhost:8787/room/${code}`);
+    const raw = new WebSocket(`ws://localhost:8787/room/${code}${extraQuery}`);
     raw.on("error", reject);
     const qs = new QueuedSocket(raw);
     qs.nextOfType("welcome").then((welcome) => resolve({ raw, qs, welcome }));
+  });
+}
+
+function tryConnectPlain(code) {
+  return new Promise((resolve) => {
+    const ws = new WebSocket(`ws://localhost:8787/room/${code}`);
+    ws.on("open", () => resolve({ ok: true, ws }));
+    ws.on("unexpected-response", (_req, res) => resolve({ ok: false, status: res.statusCode }));
+    setTimeout(() => resolve({ ok: false, status: "timeout" }), 3000);
   });
 }
 
@@ -65,10 +74,12 @@ function pickLeadCards(hand) {
   return null;
 }
 
-const code = `GP${Date.now().toString(36).slice(-8)}`;
+const createRes = await fetch("http://localhost:8787/room", { method: "POST" });
+const { code } = await createRes.json();
 
 // ---- 非ホストのstartRequestは拒否される ----
-const seat0 = await connect(code);
+// (対局終了後の破棄猶予も検証するので、短縮した値で接続しておく)
+const seat0 = await connect(code, "?testGameEndGraceMs=1500");
 const seat1 = await connect(code);
 check("seat0がhost(seat0)", seat0.welcome.seat === 0);
 check("seat1が着席", seat1.welcome.seat === 1);
@@ -120,6 +131,14 @@ while (!stateMsg.view.finished && turns < MAX_TURNS) {
 check("MAX_TURNS以内にゲームが終了する", stateMsg.view.finished === true);
 console.log(`(観測したstateメッセージ数: ${turns})`);
 console.log("最終状態:", { finished: stateMsg.view.finished, winnerSeat: stateMsg.view.winnerSeat });
+
+// ---- 対戦終了後、無通信タイマー(30分)を待たず、短い猶予後に部屋が破棄される ----
+const roomClosedMsg = await seat0.qs.nextOfType("roomClosed", 5000);
+check("対戦終了から猶予時間後にroomClosedが届く", roomClosedMsg.code === 7);
+
+await new Promise((r) => setTimeout(r, 500)); // close処理が完了するまで少し待つ
+const reconnect = await tryConnectPlain(code);
+check("破棄された部屋のコードへは再接続できない(404)", reconnect.ok === false && reconnect.status === 404);
 
 seat0.raw.close();
 

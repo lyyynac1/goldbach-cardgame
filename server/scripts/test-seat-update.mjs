@@ -47,7 +47,8 @@ function connect(code) {
   });
 }
 
-const code = `SU${Date.now().toString(36).slice(-8)}`;
+const createRes = await fetch("http://localhost:8787/room", { method: "POST" });
+const { code } = await createRes.json();
 
 const seat0 = await connect(code);
 const su1 = await seat0.qs.nextOfType("seatUpdate"); // seat0自身の入室分

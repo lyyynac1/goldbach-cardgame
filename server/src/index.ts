@@ -9,18 +9,57 @@ export interface Env {
   GAME_ROOM: DurableObjectNamespace;
 }
 
-// 招待コード(=DOのID)として許容する形式。暫定: 英数字6〜12文字。
-// (規定の文字数・文字種以外は受け付けない、という申請書の制約2をここで担保する)
-const INVITE_CODE_PATTERN = /^[A-Za-z0-9]{6,12}$/;
+// 招待コードのアルファベット。紛らわしい文字(0/O, 1/I/L)を除外した英数字。
+// 大文字のみに統一する(手入力での大小混同を無くすため、/room/<code>側で受信時に大文字化して比較する)。
+const INVITE_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+const INVITE_CODE_LENGTH = 8;
+const INVITE_CODE_PATTERN = new RegExp(`^[${INVITE_CODE_ALPHABET}]{${INVITE_CODE_LENGTH}}$`);
+
+/**
+ * crypto.getRandomValues による招待コード生成。
+ * 単純な `randomByte % alphabet.length` は alphabet.length が256の約数でない場合に
+ * わずかな偏り(modulo bias)が出るため、範囲外のバイトを捨てる棄却法で完全に均一にする。
+ */
+function generateInviteCode(): string {
+  const n = INVITE_CODE_ALPHABET.length; // 31
+  const limit = 256 - (256 % n); // 256 % 31 = 8 → limit = 248。248以上のバイトは捨てる
+  const buf = new Uint8Array(1);
+  let code = "";
+  while (code.length < INVITE_CODE_LENGTH) {
+    crypto.getRandomValues(buf);
+    if (buf[0] < limit) {
+      code += INVITE_CODE_ALPHABET[buf[0] % n];
+    }
+  }
+  return code;
+}
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    // /room/<inviteCode> — PoC: DOへのWebSocketエコー確認用ルート
+    // POST /room — 部屋を新規作成し、生成した招待コードを返す。
+    // 招待コードはサーバー側でのみ生成する(クライアントが任意の文字列で部屋を作ることはできない)。
+    if (url.pathname === "/room" && request.method === "POST") {
+      const code = generateInviteCode();
+      const id = env.GAME_ROOM.idFromName(code);
+      const stub = env.GAME_ROOM.get(id);
+      // このDOインスタンスを「作成済み」として記録する(/room/<code>側の存在確認で使う)
+      const createResponse = await stub.fetch(new Request("https://internal/__create", { method: "POST" }));
+      if (!createResponse.ok) {
+        return new Response("failed to create room", { status: 500 });
+      }
+      return new Response(JSON.stringify({ code }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      });
+    }
+
+    // /room/<inviteCode> — 対戦部屋へのWebSocket接続。
+    // 作成済み(POST /roomを経由した)の部屋にしか接続できない(GameRoom側で存在確認する)。
     const roomMatch = url.pathname.match(/^\/room\/([^/]+)$/);
     if (roomMatch) {
-      const inviteCode = roomMatch[1];
+      const inviteCode = roomMatch[1].toUpperCase();
       if (!INVITE_CODE_PATTERN.test(inviteCode)) {
         return new Response("invalid invite code format", { status: 400 });
       }
