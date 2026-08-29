@@ -33,9 +33,10 @@ export class GameRoom {
   private gameEndGraceMs: number = GAME_END_GRACE_MS;
 
   // ゲーム開始前は null。startRequest 受理時に initGame される。
+  // 座席ごとのbot判定は GameState.players[seat].isBot を唯一の情報源とする
+  // (以前は別配列で二重管理しており、切断時のbot化がredactedViewに反映されない
+  // バグの原因になっていたため、GameStateに一本化した)。
   private gameState: GameState | null = null;
-  // 座席ごとのbot判定。開始時に「その時点で人間が接続していない席」として確定する。
-  private seatIsBot: boolean[] | null = null;
 
   // POST /room (要件1,3) を経由して作成された部屋かどうか。storageに永続化し、
   // DOインスタンスが再構築されても(idFromNameだけでは常にインスタンスが得られてしまうため)
@@ -128,10 +129,24 @@ export class GameRoom {
       await this.handleValidMessage(seat, result.value);
     });
 
-    const cleanup = () => {
-      if (this.seats[seat] === ws) {
-        this.seats[seat] = null;
-        this.broadcastSeatUpdate();
+    const cleanup = async () => {
+      if (this.seats[seat] !== ws) return;
+      this.seats[seat] = null;
+      this.broadcastSeatUpdate();
+
+      // 全員切断: 誰もいない部屋でbot同士が対戦を続けても無意味なので即座に破棄する
+      if (this.seats.every((s) => s === null)) {
+        await this.destroyRoom(ErrorCode.RoomClosed);
+        return;
+      }
+
+      // 対局中にこの席が人間だった場合、再接続の猶予は設けず即座にbot化して進行を止めない
+      const player = this.gameState?.players.find((p) => p.id === seat);
+      if (this.gameState && !this.gameState.finished && player && !player.isBot) {
+        player.isBot = true;
+        // advanceAndBroadcast が state を再配信するので、残った人間には
+        // opponents[].isBot の更新として自然に伝わる
+        await this.advanceAndBroadcast();
       }
     };
     ws.addEventListener("close", cleanup);
@@ -178,11 +193,10 @@ export class GameRoom {
     }
 
     // この時点で人間が接続していない席はbotにする(要件2、難易度は固定でhard)
-    this.seatIsBot = this.seats.map((s) => s === null);
     this.gameState = initGame(
       Array.from({ length: SEAT_COUNT }, (_, i) => ({
         name: `seat${i}`,
-        isBot: this.seatIsBot![i],
+        isBot: this.seats[i] === null,
       })),
       0
     );
@@ -191,7 +205,7 @@ export class GameRoom {
   }
 
   private async handleAction(fromSeat: SeatId, ws: WebSocket, wireAction: WireAction) {
-    if (!this.gameState || !this.seatIsBot) {
+    if (!this.gameState) {
       this.sendError(ws, ErrorCode.GameNotStarted);
       return;
     }
@@ -199,7 +213,7 @@ export class GameRoom {
       this.sendError(ws, ErrorCode.NotYourTurn);
       return;
     }
-    if (this.seatIsBot[fromSeat]) {
+    if (this.gameState.players.find((p) => p.id === fromSeat)?.isBot) {
       // bot席から人間のactionが届くことは正規のクライアントでは起こらない
       this.sendError(ws, ErrorCode.NotYourTurn);
       return;
@@ -232,7 +246,7 @@ export class GameRoom {
    * 要件4: bot席の手番になったらサーバー側でchooseActionを実行し、適用・配信する。
    */
   private async advanceAndBroadcast() {
-    if (!this.gameState || !this.seatIsBot) return;
+    if (!this.gameState) return;
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -250,7 +264,8 @@ export class GameRoom {
       }
 
       const seat: number = this.gameState.currentPlayerId;
-      if (!this.seatIsBot[seat]) break; // 人間の手番。ここで止めて入力を待つ
+      const isBot = this.gameState.players.find((p) => p.id === seat)?.isBot;
+      if (!isBot) break; // 人間の手番。ここで止めて入力を待つ
 
       const action = chooseAction(this.gameState, seat, ONLINE_BOT_DIFFICULTY);
       if (action === null) {
@@ -310,13 +325,21 @@ export class GameRoom {
     await this.state.storage.setAlarm(Date.now() + this.idleMs);
   }
 
-  /**
-   * 制約6: 無通信が一定時間続いた部屋、または対戦終了から猶予時間が経過した部屋を
-   * 自動破棄する(Alarm APIによる実装)。永続化されたストレージも削除し、
-   * 以後この招待コードでの接続は「未作成の部屋」として404で拒否されるようにする。
-   */
+  /** 制約6: 無通信が一定時間続いた部屋、または対戦終了から猶予時間が経過した部屋を自動破棄する(Alarm APIによる実装)。 */
   async alarm() {
-    const closed: ServerMessage = { type: "roomClosed", code: ErrorCode.RoomClosed };
+    await this.destroyRoom(ErrorCode.RoomClosed);
+  }
+
+  /**
+   * 部屋を破棄する。接続中の全員へ roomClosed を送ってから切断し、
+   * 永続化されたストレージも削除する(以後この招待コードでの接続は
+   * 「未作成の部屋」として404で拒否される)。
+   *
+   * 呼び出し元: Alarm発火時(無通信タイムアウト/対戦終了後の猶予経過)、
+   * および全員切断時(誰もいない部屋でbot同士の対戦を続けても無意味なため)。
+   */
+  private async destroyRoom(reason: ErrorCode) {
+    const closed: ServerMessage = { type: "roomClosed", code: reason };
     const payload = JSON.stringify(closed);
     for (const ws of this.seats) {
       if (!ws) continue;
@@ -329,7 +352,6 @@ export class GameRoom {
     }
     this.seats = Array.from({ length: SEAT_COUNT }, () => null);
     this.gameState = null;
-    this.seatIsBot = null;
     this.created = false;
     await this.state.storage.deleteAll();
   }
