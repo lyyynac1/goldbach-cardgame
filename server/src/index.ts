@@ -9,6 +9,28 @@ export interface Env {
   GAME_ROOM: DurableObjectNamespace;
 }
 
+// ブラウザから直接叩かれるプレーンHTTPエンドポイント(POST /room など)向けのCORS許可オリジン。
+// 開発中のクライアント(expo web, localhost:8081)を許可する。
+// WebSocket(/room/<code>)自体はCORSの対象外(ブラウザがpreflightを要求しない)なので対象外でよい。
+const ALLOWED_ORIGINS = new Set(["http://localhost:8081"]);
+
+function corsHeaders(origin: string | null): HeadersInit {
+  if (!origin || !ALLOWED_ORIGINS.has(origin)) return {};
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    Vary: "Origin",
+  };
+}
+
+/** プレーンHTTPレスポンスにCORSヘッダーを付け足す(WebSocketアップグレード応答には使わないこと)。 */
+function withCors(response: Response, origin: string | null): Response {
+  const headers = new Headers(response.headers);
+  for (const [k, v] of Object.entries(corsHeaders(origin))) headers.set(k, v);
+  return new Response(response.body, { status: response.status, headers });
+}
+
 // 招待コードのアルファベット。紛らわしい文字(0/O, 1/I/L)を除外した英数字。
 // 大文字のみに統一する(手入力での大小混同を無くすため、/room/<code>側で受信時に大文字化して比較する)。
 const INVITE_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
@@ -37,6 +59,12 @@ function generateInviteCode(): string {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    const origin = request.headers.get("Origin");
+
+    // ブラウザからのpreflightリクエスト(CORS)
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: corsHeaders(origin) });
+    }
 
     // POST /room — 部屋を新規作成し、生成した招待コードを返す。
     // 招待コードはサーバー側でのみ生成する(クライアントが任意の文字列で部屋を作ることはできない)。
@@ -47,16 +75,20 @@ export default {
       // このDOインスタンスを「作成済み」として記録する(/room/<code>側の存在確認で使う)
       const createResponse = await stub.fetch(new Request("https://internal/__create", { method: "POST" }));
       if (!createResponse.ok) {
-        return new Response("failed to create room", { status: 500 });
+        return withCors(new Response("failed to create room", { status: 500 }), origin);
       }
-      return new Response(JSON.stringify({ code }), {
-        status: 201,
-        headers: { "content-type": "application/json" },
-      });
+      return withCors(
+        new Response(JSON.stringify({ code }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        }),
+        origin
+      );
     }
 
     // /room/<inviteCode> — 対戦部屋へのWebSocket接続。
     // 作成済み(POST /roomを経由した)の部屋にしか接続できない(GameRoom側で存在確認する)。
+    // WebSocketのハンドシェイク自体はCORS(preflight)の対象外なのでCORSヘッダーは付与しない。
     const roomMatch = url.pathname.match(/^\/room\/([^/]+)$/);
     if (roomMatch) {
       const inviteCode = roomMatch[1].toUpperCase();
@@ -71,10 +103,10 @@ export default {
     // /bench — 上級bot(maxN探索)の実行時間計測用ルート(タスク3)。ゲームロジックへの
     // 本接続ではなく、Workers実行環境上での純粋な計測のためだけの一時的なルート。
     if (url.pathname === "/bench") {
-      return handleBench(url);
+      return withCors(handleBench(url), origin);
     }
 
-    return new Response("goldbach-server: not found", { status: 404 });
+    return withCors(new Response("goldbach-server: not found", { status: 404 }), origin);
   },
 };
 

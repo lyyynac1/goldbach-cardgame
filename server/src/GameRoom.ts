@@ -143,7 +143,12 @@ export class GameRoom {
       // 対局中にこの席が人間だった場合、再接続の猶予は設けず即座にbot化して進行を止めない
       const player = this.gameState?.players.find((p) => p.id === seat);
       if (this.gameState && !this.gameState.finished && player && !player.isBot) {
-        player.isBot = true;
+        // engine側はapplyAction等が常に新しいGameStateを返す不変の流儀なので、
+        // ここも既存のstateを直接書き換えず、players配列だけ新しく作り直す
+        this.gameState = {
+          ...this.gameState,
+          players: this.gameState.players.map((p) => (p.id === seat ? { ...p, isBot: true } : p)),
+        };
         // advanceAndBroadcast が state を再配信するので、残った人間には
         // opponents[].isBot の更新として自然に伝わる
         await this.advanceAndBroadcast();
