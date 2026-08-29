@@ -16,6 +16,9 @@ build/
 /android/
 /ios/
 
+# Cloudflare Workers ローカル実行時の状態(wrangler dev)
+.wrangler/
+
 # IDE
 .vscode/
 .idea/
