@@ -19,6 +19,7 @@ function expectReject(label: string, raw: unknown, expectedCode?: ErrorCode) {
 
 // ---- 正常系 ----
 expectOk("joinRequest", { type: "joinRequest" });
+expectOk("startRequest", { type: "startRequest" });
 expectOk("ping", { type: "ping", nonce: 123 });
 expectOk("pass行動", { type: "action", action: { kind: 3, cards: [] } });
 expectOk("lead 2枚", {

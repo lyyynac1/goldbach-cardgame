@@ -84,12 +84,25 @@ export interface RedactedGameStateView {
 
 export const enum ErrorCode {
   InvalidMessageShape = 1, // メッセージの形式が不正(型・必須フィールド欠落など)
-  IllegalAction = 2, // 合法手ではない行動
+  IllegalAction = 2, // 合法手ではない行動(形式は正しいが、今の場では出せない)
   OutOfRangeValue = 3, // 数値が想定範囲外(rank範囲外、cards配列長異常など)
-  NotYourTurn = 4,
+  NotYourTurn = 4, // 自分の手番でないときにactionを送った
   RoomFull = 5,
   RoomNotFound = 6,
   RoomClosed = 7, // 対戦終了 or Alarmによる自動破棄
+  NotHost = 8, // ホスト(seat 0)以外がstartRequestを送った
+  GameNotStarted = 9, // 対戦開始前にactionを送った
+  GameAlreadyStarted = 10, // 開始済みの部屋にstartRequestを送った
+}
+
+// ============================================================
+// 座席の埋まり具合(ロビー画面用)
+// ============================================================
+
+/** 対戦開始前の座席状態。isBotは開始時に確定するため、開始前は常にfalse。 */
+export interface SeatStatus {
+  seat: SeatId;
+  occupied: boolean; // 人間が接続中か
 }
 
 // ============================================================
@@ -98,6 +111,7 @@ export const enum ErrorCode {
 
 export type ClientMessage =
   | { type: "joinRequest" } // WebSocket接続確立後、最初に送る。ペイロードなし(招待コードは接続先URLで既に特定済み)
+  | { type: "startRequest" } // ホスト(seat 0)のみ有効。空席はbotで埋めて対戦を開始する
   | { type: "action"; action: WireAction }
   | { type: "ping"; nonce: number };
 
@@ -107,8 +121,9 @@ export type ClientMessage =
 
 export type ServerMessage =
   | { type: "welcome"; seat: SeatId }
+  | { type: "seatUpdate"; seats: SeatStatus[]; connectedCount: number } // 誰かが入退室するたびに全席へ配信(ロビー用)
   | { type: "state"; view: RedactedGameStateView }
-  | { type: "error"; code: ErrorCode } // 送信元はこの直後に切断される想定
+  | { type: "error"; code: ErrorCode } // 形式不正の場合は送信元がこの直後に切断される。IllegalAction/NotYourTurn等は切断しない
   | { type: "roomClosed"; code: ErrorCode }
   | { type: "pong"; nonce: number };
 

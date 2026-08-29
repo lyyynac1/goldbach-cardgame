@@ -11,19 +11,22 @@ function check(label, cond) {
 const code = "ALARMTEST01";
 const idleMs = 1500; // テストなので1.5秒に短縮
 
-const ws = await new Promise((resolve, reject) => {
-  const w = new WebSocket(`ws://localhost:8787/room/${code}?testIdleMs=${idleMs}`);
-  w.on("open", () => {});
-  w.on("error", reject);
-  w.once("message", () => resolve(w)); // welcomeを待つ
+const ws = new WebSocket(`ws://localhost:8787/room/${code}?testIdleMs=${idleMs}`);
+await new Promise((resolve, reject) => {
+  ws.on("open", resolve);
+  ws.on("error", reject);
 });
 
 console.log(`接続完了。${idleMs}ms 何も送らず放置します...`);
 
 const result = await new Promise((resolve) => {
-  ws.once("message", (data) => resolve({ kind: "message", payload: JSON.parse(data.toString()) }));
+  ws.on("message", (data) => {
+    const payload = JSON.parse(data.toString());
+    if (payload.type === "roomClosed") resolve({ kind: "message", payload });
+    // welcome / seatUpdate 等はここでは無視して roomClosed だけを待つ
+  });
   ws.once("close", (code) => resolve({ kind: "close", code }));
-  setTimeout(() => resolve({ kind: "timeout" }), idleMs + 3000);
+  setTimeout(() => resolve({ kind: "timeout" }), idleMs + 4000);
 });
 
 console.log("結果:", result);
