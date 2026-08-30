@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { WireAction, WireCard } from "./wireCard";
 
-// 開発中はローカルの wrangler dev に接続する。
-// 本番のURLに切り替えるときはここを変更する。
-const SERVER_ORIGIN = "http://localhost:8787";
+// 接続先は環境変数で切り替える。未設定時はローカルの wrangler dev に接続する。
+// 本番URLは .env.production に EXPO_PUBLIC_SERVER_ORIGIN として記述する。
+const SERVER_ORIGIN =
+  process.env.EXPO_PUBLIC_SERVER_ORIGIN ?? "http://localhost:8787";
 
 export type SeatStatus = { seat: number; occupied: boolean };
 
