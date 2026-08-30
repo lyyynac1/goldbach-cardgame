@@ -64,11 +64,20 @@ function tryConnectPlain(code) {
   });
 }
 
-// 場が空のときのlead候補として、自分の手札から適当な2枚(テーブル23以下)を選ぶだけの雑な戦略。
+// 場が空のときのlead候補を、自分の手札から適当に選ぶだけの雑な戦略。
+// 場が空でリードできる手が本当に一つも無ければサーバー側が自動でforceSkipするはずなので、
+// ここで2枚が見つからない場合は3枚の組み合わせも試す(2枚だけだと見つからない手札がある)。
 function pickLeadCards(hand) {
   for (let i = 0; i < hand.length; i++) {
     for (let j = i + 1; j < hand.length; j++) {
       if (hand[i].r + hand[j].r <= 23) return [hand[i], hand[j]];
+    }
+  }
+  for (let i = 0; i < hand.length; i++) {
+    for (let j = i + 1; j < hand.length; j++) {
+      for (let k = j + 1; k < hand.length; k++) {
+        if (hand[i].r + hand[j].r + hand[k].r <= 23) return [hand[i], hand[j], hand[k]];
+      }
     }
   }
   return null;

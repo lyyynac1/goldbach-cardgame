@@ -90,7 +90,7 @@ export const enum ErrorCode {
   RoomFull = 5,
   RoomNotFound = 6,
   RoomClosed = 7, // 対戦終了 or Alarmによる自動破棄
-  NotHost = 8, // ホスト(seat 0)以外がstartRequestを送った
+  NotHost = 8, // ホスト以外がstartRequestを送った(ホストは最初は座席0、以後は入退室で変わりうる)
   GameNotStarted = 9, // 対戦開始前にactionを送った
   GameAlreadyStarted = 10, // 開始済みの部屋にstartRequestを送った
 }
@@ -111,7 +111,7 @@ export interface SeatStatus {
 
 export type ClientMessage =
   | { type: "joinRequest" } // WebSocket接続確立後、最初に送る。ペイロードなし(招待コードは接続先URLで既に特定済み)
-  | { type: "startRequest" } // ホスト(seat 0)のみ有効。空席はbotで埋めて対戦を開始する
+  | { type: "startRequest" } // ホストのみ有効(seatUpdateのhostを参照)。空席はbotで埋めて対戦を開始する
   | { type: "action"; action: WireAction }
   | { type: "ping"; nonce: number };
 
@@ -121,8 +121,13 @@ export type ClientMessage =
 
 export type ServerMessage =
   | { type: "welcome"; seat: SeatId }
-  | { type: "seatUpdate"; seats: SeatStatus[]; connectedCount: number } // 誰かが入退室するたびに全席へ配信(ロビー用)
+  // 誰かが入退室するたびに全席へ配信(ロビー用)。host: startRequestを送れる席番号。
+  // ホストが抜けた場合、残っている最も若い席番号に自動的に昇格する。
+  | { type: "seatUpdate"; seats: SeatStatus[]; connectedCount: number; host: SeatId }
   | { type: "state"; view: RedactedGameStateView }
+  // 人間の手番が始まったことの通知。deadlineAtまでにactionが届かなければ
+  // サーバー側で自動的にパス相当の処理をする(タイムアウト)。bot席の手番では送らない。
+  | { type: "turnDeadline"; seat: SeatId; deadlineAt: number }
   | { type: "error"; code: ErrorCode } // 形式不正の場合は送信元がこの直後に切断される。IllegalAction/NotYourTurn等は切断しない
   | { type: "roomClosed"; code: ErrorCode }
   | { type: "pong"; nonce: number };

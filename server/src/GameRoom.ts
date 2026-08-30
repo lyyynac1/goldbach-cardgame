@@ -8,7 +8,6 @@ import { getLegalActions } from "../../src/engine/rules";
 import { chooseAction } from "../../src/engine/bot";
 
 const SEAT_COUNT = 4;
-const HOST_SEAT: SeatId = 0;
 
 // オンライン対戦時のbot難易度。固定値(要件通り、部屋作成時の指定は未対応)。
 const ONLINE_BOT_DIFFICULTY = "hard" as const;
@@ -22,6 +21,14 @@ const GAME_END_GRACE_MS = 30 * 1000;
 // bot着手前の待機時間。人間が「何が起きたか」を目で追えるようにするための演出であり、
 // 待機中はCPU時間を消費しない(setTimeoutでの待機はI/O待ちと同様、CPU時間の課金対象外)。
 const BOT_MOVE_DELAY_MS = 800;
+
+// パス以外に選べる手が一つも無い人間の手番を、自動でパス扱いにするまでの待機時間。
+// クライアント側(useGameSession)のHUMAN_AUTO_PASS_DELAY_MSに合わせた値。
+const HUMAN_AUTO_PASS_DELAY_MS = 50;
+
+// 人間の手番のタイムアウト。離席や、closeイベントが飛ばない切断(電波断・端末スリープ等)を
+// 補完するためのもの。期限が来ても入力が無ければ自動でパス相当の処理をする。
+const TURN_TIMEOUT_MS = 30 * 1000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -39,6 +46,7 @@ export class GameRoom {
   private state: DurableObjectState;
   private idleMs: number = DEFAULT_ROOM_IDLE_MS;
   private gameEndGraceMs: number = GAME_END_GRACE_MS;
+  private turnTimeoutMs: number = TURN_TIMEOUT_MS;
 
   // ゲーム開始前は null。startRequest 受理時に initGame される。
   // 座席ごとのbot判定は GameState.players[seat].isBot を唯一の情報源とする
@@ -49,6 +57,15 @@ export class GameRoom {
   // advanceAndBroadcastの多重実行防止。bot着手前にawaitで間を置くようになったため、
   // その待機中に切断イベント等で再度呼ばれても二重に進行しないようにするガード。
   private advancing = false;
+
+  // startRequestを送れる席。最初は座席0だが、ロビー中(対戦開始前)にその席が抜けた場合、
+  // 残っている最も若い席へ自動的に昇格する(そうしないと誰も対戦を開始できなくなるため)。
+  private hostSeat: SeatId = 0;
+
+  // 人間の手番タイムアウト用。待機中に新しいタイマーへ置き換わっていないかを
+  // トークンで判定する(clearTimeoutだけだと非同期コールバック内での判定が難しいため)。
+  private turnTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  private turnTimeoutToken = 0;
 
   // POST /room (要件1,3) を経由して作成された部屋かどうか。storageに永続化し、
   // DOインスタンスが再構築されても(idFromNameだけでは常にインスタンスが得られてしまうため)
@@ -100,6 +117,8 @@ export class GameRoom {
     if (testIdleMs) this.idleMs = Number(testIdleMs);
     const testGameEndGraceMs = url.searchParams.get("testGameEndGraceMs");
     if (testGameEndGraceMs) this.gameEndGraceMs = Number(testGameEndGraceMs);
+    const testTurnTimeoutMs = url.searchParams.get("testTurnTimeoutMs");
+    if (testTurnTimeoutMs) this.turnTimeoutMs = Number(testTurnTimeoutMs);
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
@@ -144,7 +163,6 @@ export class GameRoom {
     const cleanup = async () => {
       if (this.seats[seat] !== ws) return;
       this.seats[seat] = null;
-      this.broadcastSeatUpdate();
 
       // 全員切断: 誰もいない部屋でbot同士が対戦を続けても無意味なので即座に破棄する
       if (this.seats.every((s) => s === null)) {
@@ -152,9 +170,22 @@ export class GameRoom {
         return;
       }
 
+      // ロビー中(対戦開始前)にホストが抜けた場合、残っている最も若い席へ自動的に昇格させる。
+      // そうしないと誰もstartRequestを送れず、部屋が無通信タイマー切れまで詰んでしまう。
+      if (!this.gameState && seat === this.hostSeat) {
+        const nextHost = this.seats.findIndex((s) => s !== null);
+        if (nextHost !== -1) this.hostSeat = nextHost as SeatId;
+      }
+
+      this.broadcastSeatUpdate();
+
       // 対局中にこの席が人間だった場合、再接続の猶予は設けず即座にbot化して進行を止めない
       const player = this.gameState?.players.find((p) => p.id === seat);
       if (this.gameState && !this.gameState.finished && player && !player.isBot) {
+        if (this.gameState.currentPlayerId === seat) {
+          // この席の手番タイムアウトが仕掛かっていたなら、即座にbot化するので不要になった
+          this.clearTurnTimeout();
+        }
         // engine側はapplyAction等が常に新しいGameStateを返す不変の流儀なので、
         // ここも既存のstateを直接書き換えず、players配列だけ新しく作り直す
         this.gameState = {
@@ -200,7 +231,7 @@ export class GameRoom {
   }
 
   private async handleStartRequest(fromSeat: SeatId, ws: WebSocket) {
-    if (fromSeat !== HOST_SEAT) {
+    if (fromSeat !== this.hostSeat) {
       this.sendError(ws, ErrorCode.NotHost);
       return;
     }
@@ -253,6 +284,9 @@ export class GameRoom {
       return;
     }
 
+    // 期限内にきちんと入力があったので、手番タイムアウトは解除する
+    this.clearTurnTimeout();
+
     this.gameState = applyAction(this.gameState, fromSeat, action).state;
     await this.advanceAndBroadcast();
   }
@@ -288,21 +322,36 @@ export class GameRoom {
           continue;
         }
 
-        const seat: number = this.gameState.currentPlayerId;
-        const isBot = this.gameState.players.find((p) => p.id === seat)?.isBot;
-        if (!isBot) break; // 人間の手番。ここで止めて入力を待つ
+        const seat = this.gameState.currentPlayerId as SeatId;
+        const player = this.gameState.players.find((p) => p.id === seat)!;
 
-        await sleep(BOT_MOVE_DELAY_MS);
-        // 待機中に部屋が破棄されている可能性があるので、抜けた直後に再確認する
-        if (!this.gameState || this.gameState.finished) break;
+        if (player.isBot) {
+          await sleep(BOT_MOVE_DELAY_MS);
+          // 待機中に部屋が破棄されている可能性があるので、抜けた直後に再確認する
+          if (!this.gameState || this.gameState.finished) break;
 
-        const action = chooseAction(this.gameState, seat, ONLINE_BOT_DIFFICULTY);
-        if (action === null) {
-          this.gameState = forceSkipLead(this.gameState);
-        } else {
-          this.gameState = applyAction(this.gameState, seat, action).state;
+          const action = chooseAction(this.gameState, seat, ONLINE_BOT_DIFFICULTY);
+          if (action === null) {
+            this.gameState = forceSkipLead(this.gameState);
+          } else {
+            this.gameState = applyAction(this.gameState, seat, action).state;
+          }
+          this.broadcastState();
+          continue;
         }
-        this.broadcastState();
+
+        // 人間の手番。パス以外に選べる手が一つも無いなら、入力を待たず自動でパスする
+        if (legal.length === 1 && legal[0].type === "pass") {
+          await sleep(HUMAN_AUTO_PASS_DELAY_MS);
+          if (!this.gameState || this.gameState.finished) break;
+          this.gameState = applyAction(this.gameState, seat, { type: "pass" }).state;
+          this.broadcastState();
+          continue;
+        }
+
+        // 本当に入力が必要な人間の手番。タイムアウトを仕掛けて、ここで止めて入力を待つ
+        this.scheduleTurnTimeout(seat);
+        break;
       }
     } finally {
       this.advancing = false;
@@ -338,11 +387,59 @@ export class GameRoom {
       occupied: ws !== null,
     }));
     const connectedCount = seats.filter((s) => s.occupied).length;
-    const msg: ServerMessage = { type: "seatUpdate", seats, connectedCount };
+    this.broadcast({ type: "seatUpdate", seats, connectedCount, host: this.hostSeat });
+  }
+
+  private broadcast(msg: ServerMessage) {
     const payload = JSON.stringify(msg);
     for (const ws of this.seats) {
       if (ws) ws.send(payload);
     }
+  }
+
+  /**
+   * 人間の手番タイムアウトを仕掛ける。クライアントには turnDeadline で期限を知らせる
+   * (残り時間表示用)。期限までにactionが届かなければ handleTurnTimeout が自動でパス相当の
+   * 処理をする。
+   */
+  private scheduleTurnTimeout(seat: SeatId) {
+    this.clearTurnTimeout();
+    const myToken = this.turnTimeoutToken;
+    const deadlineAt = Date.now() + this.turnTimeoutMs;
+    this.broadcast({ type: "turnDeadline", seat, deadlineAt });
+
+    this.turnTimeoutHandle = setTimeout(() => {
+      void this.handleTurnTimeout(seat, myToken);
+    }, this.turnTimeoutMs);
+  }
+
+  /** 仕掛かっている手番タイムアウトを解除する(入力があった/bot化された等で不要になった場合)。 */
+  private clearTurnTimeout() {
+    if (this.turnTimeoutHandle !== null) {
+      clearTimeout(this.turnTimeoutHandle);
+      this.turnTimeoutHandle = null;
+    }
+    // トークンを進めておくことで、既にタイマーコールバックが実行キューに入って
+    // しまっていた場合でも(clearTimeoutが間に合わなかった場合でも)、
+    // 発火時のトークン照合で「もう無効」と判定できるようにする。
+    this.turnTimeoutToken++;
+  }
+
+  private async handleTurnTimeout(seat: SeatId, token: number) {
+    if (token !== this.turnTimeoutToken) return; // 既に解除/上書きされた古いタイマー
+    if (!this.gameState || this.gameState.finished) return;
+    if (this.gameState.currentPlayerId !== seat) return;
+    const player = this.gameState.players.find((p) => p.id === seat);
+    if (!player || player.isBot) return; // 既に切断でbot化されている等
+
+    const legal = getLegalActions(this.gameState, seat);
+    if (legal.some((a) => a.type === "pass")) {
+      this.gameState = applyAction(this.gameState, seat, { type: "pass" }).state;
+    } else {
+      // 場が空(リード番)でpassという選択肢自体が無い場合は、強制スキップで次の人へ回す
+      this.gameState = forceSkipLead(this.gameState);
+    }
+    await this.advanceAndBroadcast();
   }
 
   private sendError(ws: WebSocket, code: ErrorCode) {
@@ -377,6 +474,7 @@ export class GameRoom {
    * および全員切断時(誰もいない部屋でbot同士の対戦を続けても無意味なため)。
    */
   private async destroyRoom(reason: ErrorCode) {
+    this.clearTurnTimeout(); // 破棄後にタイマーが発火しても無害だが、念のため止めておく
     const closed: ServerMessage = { type: "roomClosed", code: reason };
     const payload = JSON.stringify(closed);
     for (const ws of this.seats) {
