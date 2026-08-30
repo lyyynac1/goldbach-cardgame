@@ -1,10 +1,36 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { WireAction, WireCard } from "./wireCard";
 
 // 開発中はローカルの wrangler dev に接続する。
 // 本番のURLに切り替えるときはここを変更する。
 const SERVER_ORIGIN = "http://localhost:8787";
 
 export type SeatStatus = { seat: number; occupied: boolean };
+
+export type OpponentView = {
+  seat: number;
+  handCount: number;
+  passed: boolean;
+  isBot: boolean;
+};
+
+export type FieldView = {
+  cards: WireCard[];
+  score: number | null;
+  table: number | null;
+  lastPlayCount: number;
+};
+
+export type GameView = {
+  selfSeat: number;
+  selfHand: WireCard[];
+  opponents: OpponentView[];
+  field: FieldView;
+  currentSeat: number;
+  finished: boolean;
+  winnerSeat: number | null;
+  pendingAgariSeat: number | null;
+};
 
 export type RoomStatus =
   | "idle"
@@ -21,11 +47,12 @@ export type OnlineRoom = {
   mySeat: number | null;
   connectedCount: number;
   seats: SeatStatus[];
-  gameView: unknown | null;
+  gameView: GameView | null;
   errorMessage: string | null;
   createRoom: () => Promise<void>;
   joinRoom: (code: string) => void;
   start: () => void;
+  sendAction: (action: WireAction) => void;
   leave: () => void;
 };
 
@@ -35,7 +62,7 @@ export function useOnlineRoom(): OnlineRoom {
   const [mySeat, setMySeat] = useState<number | null>(null);
   const [connectedCount, setConnectedCount] = useState(0);
   const [seats, setSeats] = useState<SeatStatus[]>([]);
-  const [gameView, setGameView] = useState<unknown | null>(null);
+  const [gameView, setGameView] = useState<GameView | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -97,6 +124,7 @@ export function useOnlineRoom(): OnlineRoom {
             setStatus("closed");
             break;
           case "error":
+            console.log("server error:", msg.code);
             setErrorMessage(`エラーが発生しました (${msg.code})`);
             break;
         }
@@ -145,6 +173,10 @@ export function useOnlineRoom(): OnlineRoom {
     wsRef.current?.send(JSON.stringify({ type: "startRequest" }));
   }, []);
 
+  const sendAction = useCallback((action: WireAction) => {
+    wsRef.current?.send(JSON.stringify({ type: "action", action }));
+  }, []);
+
   const leave = useCallback(() => {
     closeSocket();
     setStatus("idle");
@@ -167,6 +199,7 @@ export function useOnlineRoom(): OnlineRoom {
     createRoom,
     joinRoom,
     start,
+    sendAction,
     leave,
   };
 }

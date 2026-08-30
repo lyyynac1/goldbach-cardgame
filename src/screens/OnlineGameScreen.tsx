@@ -1,0 +1,241 @@
+import React, { useMemo, useState } from "react";
+import { StyleSheet, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { useTheme } from "../ThemeContext";
+import { FieldArea } from "../components/FieldArea";
+import { HandRow } from "../components/HandRow";
+import { ActionBar } from "../components/ActionBar";
+import { getLegalActions } from "../engine/rules";
+import { Action, Card, GameState } from "../engine/types";
+import { GameView } from "../state/useOnlineRoom";
+import {
+  WireAction,
+  WireActionKind,
+  cardsToWire,
+  wireToCards,
+} from "../state/wireCard";
+
+type Props = {
+  view: GameView;
+  onAction: (action: WireAction) => void;
+  onExit: () => void;
+};
+
+function cardKey(c: Card): string {
+  return `${c.suit}-${c.rank}`;
+}
+
+/** 選択したカードと一致する合法手を探す。useGameSession と同じ判定。 */
+function findMatchingAction(
+  legal: Action[],
+  selected: Card[],
+): Action | undefined {
+  if (selected.length === 0) return undefined;
+  const selectedKeys = selected.map(cardKey).sort();
+  return legal.find((a) => {
+    if (a.type === "pass") return false;
+    if (a.cards.length !== selected.length) return false;
+    const keys = a.cards.map(cardKey).sort();
+    return keys.every((k, i) => k === selectedKeys[i]);
+  });
+}
+
+/** Action の種別を、サーバーへ送る数値へ変換する。 */
+function actionKindToWire(type: Action["type"]): number {
+  switch (type) {
+    case "lead":
+      return WireActionKind.Lead;
+    case "beat":
+      return WireActionKind.Beat;
+    case "divisor":
+      return WireActionKind.Divisor;
+    default:
+      return WireActionKind.Pass;
+  }
+}
+
+export function OnlineGameScreen({ view, onAction, onExit }: Props) {
+  const theme = useTheme();
+  const [selected, setSelected] = useState<Card[]>([]);
+
+  const hand = useMemo(() => wireToCards(view.selfHand), [view.selfHand]);
+  const field = useMemo(
+    () => ({
+      cards: wireToCards(view.field.cards),
+      score: view.field.score,
+      table: view.field.table,
+      lastPlayCount: view.field.lastPlayCount,
+    }),
+    [view.field],
+  );
+
+  const isMyTurn = view.currentSeat === view.selfSeat;
+
+  // getLegalActions は自分の手札と場しか参照しないため、
+  // 他人の手札を持たないクライアントでもダミーの GameState で判定できる。
+  const legalActions = useMemo<Action[]>(() => {
+    const dummy = {
+      players: [{ id: view.selfSeat, hand, passed: false, isBot: false }],
+      field,
+      currentPlayerId: view.currentSeat,
+      finished: view.finished,
+      pendingAgari: null,
+    } as unknown as GameState;
+    return getLegalActions(dummy, view.selfSeat);
+  }, [hand, field, view.selfSeat, view.currentSeat, view.finished]);
+
+  const matchingAction = useMemo(
+    () => findMatchingAction(legalActions, selected),
+    [legalActions, selected],
+  );
+
+  const canPass = legalActions.some((a) => a.type === "pass");
+
+  const toggleCard = (card: Card) => {
+    setSelected((prev) =>
+      prev.some((c) => cardKey(c) === cardKey(card))
+        ? prev.filter((c) => cardKey(c) !== cardKey(card))
+        : [...prev, card],
+    );
+  };
+
+  const play = () => {
+    if (!matchingAction || matchingAction.type === "pass") return;
+    onAction({
+      kind: actionKindToWire(matchingAction.type),
+      cards: cardsToWire(matchingAction.cards),
+    });
+    setSelected([]);
+  };
+
+  const pass = () => {
+    onAction({ kind: WireActionKind.Pass, cards: [] });
+    setSelected([]);
+  };
+
+  const currentPlayerLabel = isMyTurn
+    ? "あなた"
+    : view.opponents.find((o) => o.seat === view.currentSeat)?.isBot
+      ? "コンピュータ"
+      : `プレイヤー${view.currentSeat + 1}`;
+
+  return (
+    <SafeAreaView
+      style={[styles.container, { backgroundColor: theme.colors.background }]}
+    >
+      <View style={styles.topSection}>
+        <Text
+          onPress={onExit}
+          style={{
+            color: theme.colors.textSecondary,
+            fontFamily: theme.typography.body.fontFamily,
+            fontSize: 16,
+            paddingVertical: 6,
+          }}
+        >
+          退出する
+        </Text>
+
+        <View style={styles.opponentRow}>
+          {view.opponents.map((op) => (
+            <View
+              key={op.seat}
+              style={[
+                styles.opponentBox,
+                {
+                  borderColor:
+                    view.currentSeat === op.seat
+                      ? theme.colors.accentGold
+                      : theme.colors.border,
+                  borderRadius: theme.radius.panel,
+                },
+              ]}
+            >
+              <Text
+                style={{
+                  color: theme.colors.textPrimary,
+                  fontFamily: theme.typography.body.fontFamily,
+                  fontSize: 14,
+                }}
+              >
+                {op.isBot ? "コンピュータ" : `プレイヤー${op.seat + 1}`}
+              </Text>
+              <Text
+                style={{
+                  color: theme.colors.textSecondary,
+                  fontFamily: theme.typography.numeral.fontFamily,
+                  fontSize: 18,
+                  marginTop: 2,
+                }}
+              >
+                {op.handCount}枚
+              </Text>
+              {op.passed && (
+                <Text
+                  style={{
+                    color: theme.colors.textSecondary,
+                    fontFamily: theme.typography.body.fontFamily,
+                    fontSize: 12,
+                  }}
+                >
+                  パス
+                </Text>
+              )}
+            </View>
+          ))}
+        </View>
+      </View>
+
+      <View style={styles.middleSection}>
+        <FieldArea field={field} clearedSnapshot={null} playAnimation={null} />
+      </View>
+
+      <View style={styles.bottomSection}>
+        <HandRow
+          hand={hand}
+          selected={selected}
+          onToggle={toggleCard}
+          disabled={!isMyTurn}
+        />
+        <ActionBar
+          isMyTurn={isMyTurn}
+          canPlay={!!matchingAction}
+          canPass={canPass}
+          selectedCount={selected.length}
+          onPlay={play}
+          onPass={pass}
+          humanPassed={false}
+          humanPassWasForced={false}
+          isForcedPassPending={false}
+          currentPlayerName={currentPlayerLabel}
+        />
+      </View>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 12,
+  },
+  topSection: {},
+  opponentRow: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    marginTop: 8,
+  },
+  opponentBox: {
+    borderWidth: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    alignItems: "center",
+  },
+  middleSection: {
+    flex: 1,
+    justifyContent: "center",
+  },
+  bottomSection: {},
+});
