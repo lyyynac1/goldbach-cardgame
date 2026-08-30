@@ -150,22 +150,20 @@ export function OnlineGameScreen({
     });
   }, [view.lastAction, view.selfSeat, view.opponents]);
 
-  // 場が流れて空になった瞬間、直前の場札を一瞬だけ薄く残す。
-  // (ソロプレイの clearedFieldSnapshot と同じ演出。サーバーからは届かないので
-  //  クライアント側で「場が空になった」ことを検知して自前で保持する)
-  const prevFieldRef = useRef<Card[]>([]);
+  // 場が流れたときの残像。表示するのは「流れる直前の場」ではなく
+  // 「場を流した張本人が出した手」(サーバーの lastClearedField)。
+  // seq が増えたときだけ新しい出来事として扱う。同じ state の再配信
+  // (入室・切断→bot化など)では seq が変化しないので再発火しない。
+  const prevSeqRef = useRef<number>(-1);
   const [clearedSnapshot, setClearedSnapshot] = useState<Card[] | null>(null);
-
   useEffect(() => {
-    const prev = prevFieldRef.current;
-    prevFieldRef.current = field.cards;
-
-    if (field.cards.length === 0 && prev.length > 0) {
-      setClearedSnapshot(prev);
-      const timer = setTimeout(() => setClearedSnapshot(null), 1200);
-      return () => clearTimeout(timer);
-    }
-  }, [field.cards]);
+    if (view.seq === prevSeqRef.current) return;
+    prevSeqRef.current = view.seq;
+    if (!view.lastClearedField || view.lastClearedField.length === 0) return;
+    setClearedSnapshot(wireToCards(view.lastClearedField));
+    const timer = setTimeout(() => setClearedSnapshot(null), 1200);
+    return () => clearTimeout(timer);
+  }, [view.seq, view.lastClearedField]);
 
   const toggleCard = (card: Card) => {
     setSelected((prev) =>
@@ -268,7 +266,7 @@ export function OnlineGameScreen({
       <View style={styles.middleSection}>
         <FieldArea
           field={field}
-          clearedSnapshot={null}
+          clearedSnapshot={clearedSnapshot}
           playAnimation={playAnimation}
         />
       </View>

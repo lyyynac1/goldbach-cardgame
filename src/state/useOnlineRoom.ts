@@ -37,6 +37,8 @@ export type GameView = {
   winnerSeat: number | null;
   lastAction: LastActionView | null;
   pendingAgariSeat: number | null;
+  lastClearedField: WireCard[] | null;
+  seq: number;
 };
 
 export type RoomStatus =
