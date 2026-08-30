@@ -19,6 +19,14 @@ const DEFAULT_ROOM_IDLE_MS = 30 * 60 * 1000;
 // 対戦終了後、部屋を破棄するまでの猶予時間。結果画面を見る時間として少し余裕を持たせる。
 const GAME_END_GRACE_MS = 30 * 1000;
 
+// bot着手前の待機時間。人間が「何が起きたか」を目で追えるようにするための演出であり、
+// 待機中はCPU時間を消費しない(setTimeoutでの待機はI/O待ちと同様、CPU時間の課金対象外)。
+const BOT_MOVE_DELAY_MS = 800;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * Durable Object 本実装。
  *
@@ -37,6 +45,10 @@ export class GameRoom {
   // (以前は別配列で二重管理しており、切断時のbot化がredactedViewに反映されない
   // バグの原因になっていたため、GameStateに一本化した)。
   private gameState: GameState | null = null;
+
+  // advanceAndBroadcastの多重実行防止。bot着手前にawaitで間を置くようになったため、
+  // その待機中に切断イベント等で再度呼ばれても二重に進行しないようにするガード。
+  private advancing = false;
 
   // POST /room (要件1,3) を経由して作成された部屋かどうか。storageに永続化し、
   // DOインスタンスが再構築されても(idFromNameだけでは常にインスタンスが得られてしまうため)
@@ -249,37 +261,58 @@ export class GameRoom {
    * 現在のプレイヤーがbotである間、および強制スキップ・あがり後の破棄待ちの間、
    * 人間の手番が来るか対戦終了するまでサーバー側で自動的に進行させる。
    * 要件4: bot席の手番になったらサーバー側でchooseActionを実行し、適用・配信する。
+   *
+   * bot自身の着手前には、人間が経過を目で追えるようBOT_MOVE_DELAY_MSだけ待機し、
+   * 1手ごとに毎回stateを再配信する(まとめて最後に1回だけ、ではなく)。
    */
   private async advanceAndBroadcast() {
     if (!this.gameState) return;
+    if (this.advancing) return; // 既に進行中なら二重に走らせない。状態は同じthis.gameStateを見ているので、進行中のループが続きを処理する
+    this.advancing = true;
 
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      if (this.gameState.finished) break;
+    try {
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        if (this.gameState.finished) break;
 
-      if (this.gameState.pendingAgari) {
-        this.gameState = resolveAgariDiscard(this.gameState);
-        continue;
+        if (this.gameState.pendingAgari) {
+          this.gameState = resolveAgariDiscard(this.gameState);
+          this.broadcastState();
+          continue;
+        }
+
+        const legal = getLegalActions(this.gameState, this.gameState.currentPlayerId);
+        if (legal.length === 0) {
+          this.gameState = forceSkipLead(this.gameState);
+          this.broadcastState();
+          continue;
+        }
+
+        const seat: number = this.gameState.currentPlayerId;
+        const isBot = this.gameState.players.find((p) => p.id === seat)?.isBot;
+        if (!isBot) break; // 人間の手番。ここで止めて入力を待つ
+
+        await sleep(BOT_MOVE_DELAY_MS);
+        // 待機中に部屋が破棄されている可能性があるので、抜けた直後に再確認する
+        if (!this.gameState || this.gameState.finished) break;
+
+        const action = chooseAction(this.gameState, seat, ONLINE_BOT_DIFFICULTY);
+        if (action === null) {
+          this.gameState = forceSkipLead(this.gameState);
+        } else {
+          this.gameState = applyAction(this.gameState, seat, action).state;
+        }
+        this.broadcastState();
       }
-
-      const legal = getLegalActions(this.gameState, this.gameState.currentPlayerId);
-      if (legal.length === 0) {
-        this.gameState = forceSkipLead(this.gameState);
-        continue;
-      }
-
-      const seat: number = this.gameState.currentPlayerId;
-      const isBot = this.gameState.players.find((p) => p.id === seat)?.isBot;
-      if (!isBot) break; // 人間の手番。ここで止めて入力を待つ
-
-      const action = chooseAction(this.gameState, seat, ONLINE_BOT_DIFFICULTY);
-      if (action === null) {
-        this.gameState = forceSkipLead(this.gameState);
-        continue;
-      }
-      this.gameState = applyAction(this.gameState, seat, action).state;
+    } finally {
+      this.advancing = false;
     }
 
+    if (!this.gameState) return; // 待機中に(全員切断等で)部屋自体が破棄された
+
+    // ループを抜けた時点(人間の手番になった、または対戦終了した)の状態を必ず1回送る。
+    // 例えば最初から人間の手番でbotが一度も動かなかった場合、ループ内では
+    // 一度もbroadcastStateが呼ばれないため、ここでの送信が唯一の機会になる。
     this.broadcastState();
 
     if (this.gameState.finished) {
