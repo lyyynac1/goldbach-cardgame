@@ -6,10 +6,14 @@
  * 手札を伏せる対象はあくまで各プレイヤーの hand のみ。
  */
 import { GameState } from "../../src/engine/types";
-import { FieldView, OpponentSeatView, RedactedGameStateView, SeatId } from "./protocol";
+import { FieldView, LastActionView, OpponentSeatView, RedactedGameStateView, SeatId } from "./protocol";
 import { cardToWire } from "./wireConvert";
 
-export function buildRedactedView(state: GameState, forPlayerId: number): RedactedGameStateView {
+export function buildRedactedView(
+  state: GameState,
+  forPlayerId: number,
+  lastAction: LastActionView | null
+): RedactedGameStateView {
   const self = state.players.find((p) => p.id === forPlayerId);
   if (!self) {
     throw new Error(`buildRedactedView: player ${forPlayerId} not found in state`);
@@ -41,5 +45,6 @@ export function buildRedactedView(state: GameState, forPlayerId: number): Redact
     finished: state.finished,
     winnerSeat: state.winnerId as SeatId | null,
     pendingAgariSeat: state.pendingAgari ? (state.pendingAgari.playerId as SeatId) : null,
+    lastAction,
   };
 }

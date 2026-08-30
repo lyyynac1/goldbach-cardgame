@@ -66,6 +66,17 @@ export interface FieldView {
   lastPlayCount: number;
 }
 
+/**
+ * 直前に誰が何をしたか。演出用(カードが飛んでくるアニメーションの向き決定、
+ * パスの表示)。forceSkip(場が空でリードすら作れず強制的に手番が飛んだ場合)も
+ * 見た目上は「何もしなかった」ので Pass として表現する。
+ * ゲーム開始直後などまだ誰も行動していない場合は null。
+ */
+export interface LastActionView {
+  seat: SeatId;
+  kind: ActionKind;
+}
+
 /** プレイヤーごとに個別生成して送る、視点付きゲーム状態。自分の手札(hand)だけ実データを持つ。 */
 export interface RedactedGameStateView {
   selfSeat: SeatId;
@@ -76,6 +87,7 @@ export interface RedactedGameStateView {
   finished: boolean;
   winnerSeat: SeatId | null;
   pendingAgariSeat: SeatId | null;
+  lastAction: LastActionView | null;
 }
 
 // ============================================================

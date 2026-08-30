@@ -1,8 +1,8 @@
-import { ClientMessage, ErrorCode, SeatStatus, ServerMessage, SeatId, WireAction } from "./protocol";
+import { ActionKind, ClientMessage, ErrorCode, LastActionView, SeatStatus, ServerMessage, SeatId, WireAction } from "./protocol";
 import { validateClientMessage } from "./validation";
 import { buildRedactedView } from "./redactedView";
-import { wireActionToAction } from "./wireConvert";
-import { GameState } from "../../src/engine/types";
+import { ACTION_TYPE_TO_KIND, wireActionToAction } from "./wireConvert";
+import { Action, GameState } from "../../src/engine/types";
 import { applyAction, forceSkipLead, initGame, resolveAgariDiscard } from "../../src/engine/engine";
 import { getLegalActions } from "../../src/engine/rules";
 import { chooseAction } from "../../src/engine/bot";
@@ -53,6 +53,10 @@ export class GameRoom {
   // (以前は別配列で二重管理しており、切断時のbot化がredactedViewに反映されない
   // バグの原因になっていたため、GameStateに一本化した)。
   private gameState: GameState | null = null;
+
+  // 直前に誰が何をしたか(演出用: アニメーションの向き決定、パスの表示)。
+  // forceSkipもクライアントにはPassとして見せる(見た目上は同じ「何もしなかった」なため)。
+  private lastAction: LastActionView | null = null;
 
   // advanceAndBroadcastの多重実行防止。bot着手前にawaitで間を置くようになったため、
   // その待機中に切断イベント等で再度呼ばれても二重に進行しないようにするガード。
@@ -288,6 +292,11 @@ export class GameRoom {
     this.clearTurnTimeout();
 
     this.gameState = applyAction(this.gameState, fromSeat, action).state;
+    this.recordAction(fromSeat, ACTION_TYPE_TO_KIND[action.type]);
+    // 人間自身の手をまず単独で配信する。advanceAndBroadcastに直接入ると、続くbotの手
+    // (800ms待機はさむが)と一緒くたに配信されてしまい、この手番の結果が画面に一切
+    // 表示されないまま次のbotの手で場が上書きされて見える不具合があったため。
+    this.broadcastState();
     await this.advanceAndBroadcast();
   }
 
@@ -317,7 +326,9 @@ export class GameRoom {
 
         const legal = getLegalActions(this.gameState, this.gameState.currentPlayerId);
         if (legal.length === 0) {
+          const skippedSeat = this.gameState.currentPlayerId;
           this.gameState = forceSkipLead(this.gameState);
+          this.recordAction(skippedSeat, ActionKind.Pass);
           this.broadcastState();
           continue;
         }
@@ -333,8 +344,10 @@ export class GameRoom {
           const action = chooseAction(this.gameState, seat, ONLINE_BOT_DIFFICULTY);
           if (action === null) {
             this.gameState = forceSkipLead(this.gameState);
+            this.recordAction(seat, ActionKind.Pass);
           } else {
             this.gameState = applyAction(this.gameState, seat, action).state;
+            this.recordAction(seat, ACTION_TYPE_TO_KIND[action.type]);
           }
           this.broadcastState();
           continue;
@@ -345,6 +358,7 @@ export class GameRoom {
           await sleep(HUMAN_AUTO_PASS_DELAY_MS);
           if (!this.gameState || this.gameState.finished) break;
           this.gameState = applyAction(this.gameState, seat, { type: "pass" }).state;
+          this.recordAction(seat, ActionKind.Pass);
           this.broadcastState();
           continue;
         }
@@ -375,7 +389,7 @@ export class GameRoom {
     for (let seat = 0; seat < SEAT_COUNT; seat++) {
       const ws = this.seats[seat];
       if (!ws) continue;
-      const view = buildRedactedView(this.gameState, seat);
+      const view = buildRedactedView(this.gameState, seat, this.lastAction);
       const msg: ServerMessage = { type: "state", view };
       ws.send(JSON.stringify(msg));
     }
@@ -439,7 +453,14 @@ export class GameRoom {
       // 場が空(リード番)でpassという選択肢自体が無い場合は、強制スキップで次の人へ回す
       this.gameState = forceSkipLead(this.gameState);
     }
+    this.recordAction(seat, ActionKind.Pass);
+    // handleActionと同様、この手番の結果を単独で配信してからadvanceAndBroadcastに入る
+    this.broadcastState();
     await this.advanceAndBroadcast();
+  }
+
+  private recordAction(seat: number, kind: ActionKind) {
+    this.lastAction = { seat: seat as SeatId, kind };
   }
 
   private sendError(ws: WebSocket, code: ErrorCode) {

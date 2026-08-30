@@ -25,7 +25,7 @@ const KIND_TO_ACTION_TYPE = {
   [ActionKind.Pass]: "pass",
 } as const;
 
-const ACTION_TYPE_TO_KIND: Record<Action["type"], ActionKind> = {
+export const ACTION_TYPE_TO_KIND: Record<Action["type"], ActionKind> = {
   lead: ActionKind.Lead,
   beat: ActionKind.Beat,
   divisor: ActionKind.Divisor,
