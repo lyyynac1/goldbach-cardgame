@@ -20,6 +20,7 @@ import { OnlineLobbyScreen } from "./src/screens/OnlineLobbyScreen";
 import { OnlineJoinScreen } from "./src/screens/OnlineJoinScreen";
 import { useOnlineRoom } from "./src/state/useOnlineRoom";
 import { OnlineGameScreen } from "./src/screens/OnlineGameScreen";
+import { OnlineResultScreen } from "./src/screens/OnlineResultScreen";
 import { PlayerConfig } from "./src/state/useGameSession";
 import { useTrophyEngine } from "./src/trophies/useTrophyEngine";
 import { Difficulty } from "./src/engine/bot";
@@ -99,6 +100,17 @@ function Root() {
   if (screen.name === "online-game") {
     if (!room.gameView) {
       return null;
+    }
+    if (room.gameView.finished) {
+      return (
+        <OnlineResultScreen
+          view={room.gameView}
+          onBackToHome={() => {
+            room.leave();
+            setScreen({ name: "home" });
+          }}
+        />
+      );
     }
     return (
       <OnlineGameScreen
