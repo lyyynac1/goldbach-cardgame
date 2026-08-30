@@ -2,7 +2,7 @@ import { ActionKind, ClientMessage, ErrorCode, LastActionView, SeatStatus, Serve
 import { validateClientMessage } from "./validation";
 import { buildRedactedView } from "./redactedView";
 import { ACTION_TYPE_TO_KIND, wireActionToAction } from "./wireConvert";
-import { Action, GameState } from "../../src/engine/types";
+import { Action, Card, GameState } from "../../src/engine/types";
 import { applyAction, forceSkipLead, initGame, resolveAgariDiscard } from "../../src/engine/engine";
 import { getLegalActions } from "../../src/engine/rules";
 import { chooseAction } from "../../src/engine/bot";
@@ -18,13 +18,28 @@ const DEFAULT_ROOM_IDLE_MS = 30 * 60 * 1000;
 // 対戦終了後、部屋を破棄するまでの猶予時間。結果画面を見る時間として少し余裕を持たせる。
 const GAME_END_GRACE_MS = 30 * 1000;
 
-// bot着手前の待機時間。人間が「何が起きたか」を目で追えるようにするための演出であり、
-// 待機中はCPU時間を消費しない(setTimeoutでの待機はI/O待ちと同様、CPU時間の課金対象外)。
-const BOT_MOVE_DELAY_MS = 800;
+// 以下の演出用待機時間は、すべてクライアント側(useGameSession.ts)のソロプレイと
+// 同じ値に揃えている。待機中はCPU時間を消費しない(setTimeoutでの待機はI/O待ちと
+// 同様、CPU時間の課金対象外)。
+
+// bot着手前の「考え中」待機。useGameSessionのBOT_THINK_DELAY_MSに合わせた値。
+const BOT_THINK_DELAY_MS = 3000;
 
 // パス以外に選べる手が一つも無い人間の手番を、自動でパス扱いにするまでの待機時間。
-// クライアント側(useGameSession)のHUMAN_AUTO_PASS_DELAY_MSに合わせた値。
+// useGameSessionのHUMAN_AUTO_PASS_DELAY_MSに合わせた値。
 const HUMAN_AUTO_PASS_DELAY_MS = 50;
+
+// 場が空でリードすら作れない場合、強制的に手番を飛ばすまでの待機時間。
+// useGameSessionのFORCE_SKIP_DELAY_MSに合わせた値。
+const FORCE_SKIP_DELAY_MS = 300;
+
+// パスした状態(lastAction/passedフラグ)を見せてから次に進むまでの最小保持時間。
+// useGameSessionのPASS_DISPLAY_DELAY_MSに合わせた値。
+const PASS_DISPLAY_DELAY_MS = 800;
+
+// あがり発生から、互いに素な手札を捨てる処理(resolveAgariDiscard)を行うまでの待機時間。
+// useGameSessionのAGARI_DISCARD_DELAY_MSに合わせた値。
+const AGARI_DISCARD_DELAY_MS = 1000;
 
 // 人間の手番のタイムアウト。離席や、closeイベントが飛ばない切断(電波断・端末スリープ等)を
 // 補完するためのもの。期限が来ても入力が無ければ自動でパス相当の処理をする。
@@ -57,6 +72,10 @@ export class GameRoom {
   // 直前に誰が何をしたか(演出用: アニメーションの向き決定、パスの表示)。
   // forceSkipもクライアントにはPassとして見せる(見た目上は同じ「何もしなかった」なため)。
   private lastAction: LastActionView | null = null;
+
+  // 場を流した要因の手(残像表示用)。場がちょうど今流れた直後のみ値を持ち、
+  // それ以外は null にリセットする(「流れる直前の場」ではなく「流した張本人の手」)。
+  private lastClearedField: Card[] | null = null;
 
   // advanceAndBroadcastの多重実行防止。bot着手前にawaitで間を置くようになったため、
   // その待機中に切断イベント等で再度呼ばれても二重に進行しないようにするガード。
@@ -291,8 +310,9 @@ export class GameRoom {
     // 期限内にきちんと入力があったので、手番タイムアウトは解除する
     this.clearTurnTimeout();
 
-    this.gameState = applyAction(this.gameState, fromSeat, action).state;
-    this.recordAction(fromSeat, ACTION_TYPE_TO_KIND[action.type]);
+    const applyResult = applyAction(this.gameState, fromSeat, action);
+    this.gameState = applyResult.state;
+    this.recordAction(fromSeat, ACTION_TYPE_TO_KIND[action.type], applyResult.fieldWasReset);
     // 人間自身の手をまず単独で配信する。advanceAndBroadcastに直接入ると、続くbotの手
     // (800ms待機はさむが)と一緒くたに配信されてしまい、この手番の結果が画面に一切
     // 表示されないまま次のbotの手で場が上書きされて見える不具合があったため。
@@ -305,8 +325,9 @@ export class GameRoom {
    * 人間の手番が来るか対戦終了するまでサーバー側で自動的に進行させる。
    * 要件4: bot席の手番になったらサーバー側でchooseActionを実行し、適用・配信する。
    *
-   * bot自身の着手前には、人間が経過を目で追えるようBOT_MOVE_DELAY_MSだけ待機し、
-   * 1手ごとに毎回stateを再配信する(まとめて最後に1回だけ、ではなく)。
+   * 各遷移の待機時間はすべてクライアント側(useGameSession.ts)のソロプレイに
+   * 合わせている(BOT_THINK_DELAY_MS等、冒頭の定数を参照)。1手ごとに毎回stateを
+   * 再配信する(まとめて最後に1回だけ、ではなく)。
    */
   private async advanceAndBroadcast() {
     if (!this.gameState) return;
@@ -319,6 +340,8 @@ export class GameRoom {
         if (this.gameState.finished) break;
 
         if (this.gameState.pendingAgari) {
+          await sleep(AGARI_DISCARD_DELAY_MS);
+          if (!this.gameState || this.gameState.finished) break;
           this.gameState = resolveAgariDiscard(this.gameState);
           this.broadcastState();
           continue;
@@ -326,9 +349,11 @@ export class GameRoom {
 
         const legal = getLegalActions(this.gameState, this.gameState.currentPlayerId);
         if (legal.length === 0) {
+          await sleep(FORCE_SKIP_DELAY_MS);
+          if (!this.gameState || this.gameState.finished) break;
           const skippedSeat = this.gameState.currentPlayerId;
           this.gameState = forceSkipLead(this.gameState);
-          this.recordAction(skippedSeat, ActionKind.Pass);
+          this.recordAction(skippedSeat, ActionKind.Pass, false); // forceSkipは元々場が空なので流したことにはならない
           this.broadcastState();
           continue;
         }
@@ -337,19 +362,28 @@ export class GameRoom {
         const player = this.gameState.players.find((p) => p.id === seat)!;
 
         if (player.isBot) {
-          await sleep(BOT_MOVE_DELAY_MS);
+          await sleep(BOT_THINK_DELAY_MS);
           // 待機中に部屋が破棄されている可能性があるので、抜けた直後に再確認する
           if (!this.gameState || this.gameState.finished) break;
 
           const action = chooseAction(this.gameState, seat, ONLINE_BOT_DIFFICULTY);
+          let wasPass: boolean;
           if (action === null) {
             this.gameState = forceSkipLead(this.gameState);
-            this.recordAction(seat, ActionKind.Pass);
+            this.recordAction(seat, ActionKind.Pass, false);
+            wasPass = true;
           } else {
-            this.gameState = applyAction(this.gameState, seat, action).state;
-            this.recordAction(seat, ACTION_TYPE_TO_KIND[action.type]);
+            const applyResult = applyAction(this.gameState, seat, action);
+            this.gameState = applyResult.state;
+            this.recordAction(seat, ACTION_TYPE_TO_KIND[action.type], applyResult.fieldWasReset);
+            wasPass = action.type === "pass";
           }
           this.broadcastState();
+          if (wasPass) {
+            // パスした状態を見せてから次に進む(botが連続パスすると一瞬で流れてしまうため)
+            await sleep(PASS_DISPLAY_DELAY_MS);
+            if (!this.gameState || this.gameState.finished) break;
+          }
           continue;
         }
 
@@ -357,8 +391,9 @@ export class GameRoom {
         if (legal.length === 1 && legal[0].type === "pass") {
           await sleep(HUMAN_AUTO_PASS_DELAY_MS);
           if (!this.gameState || this.gameState.finished) break;
-          this.gameState = applyAction(this.gameState, seat, { type: "pass" }).state;
-          this.recordAction(seat, ActionKind.Pass);
+          const applyResult = applyAction(this.gameState, seat, { type: "pass" });
+          this.gameState = applyResult.state;
+          this.recordAction(seat, ActionKind.Pass, applyResult.fieldWasReset);
           this.broadcastState();
           continue;
         }
@@ -389,7 +424,7 @@ export class GameRoom {
     for (let seat = 0; seat < SEAT_COUNT; seat++) {
       const ws = this.seats[seat];
       if (!ws) continue;
-      const view = buildRedactedView(this.gameState, seat, this.lastAction);
+      const view = buildRedactedView(this.gameState, seat, this.lastAction, this.lastClearedField);
       const msg: ServerMessage = { type: "state", view };
       ws.send(JSON.stringify(msg));
     }
@@ -447,20 +482,27 @@ export class GameRoom {
     if (!player || player.isBot) return; // 既に切断でbot化されている等
 
     const legal = getLegalActions(this.gameState, seat);
+    let fieldWasReset = false;
     if (legal.some((a) => a.type === "pass")) {
-      this.gameState = applyAction(this.gameState, seat, { type: "pass" }).state;
+      const applyResult = applyAction(this.gameState, seat, { type: "pass" });
+      this.gameState = applyResult.state;
+      fieldWasReset = applyResult.fieldWasReset;
     } else {
       // 場が空(リード番)でpassという選択肢自体が無い場合は、強制スキップで次の人へ回す
       this.gameState = forceSkipLead(this.gameState);
     }
-    this.recordAction(seat, ActionKind.Pass);
+    this.recordAction(seat, ActionKind.Pass, fieldWasReset);
     // handleActionと同様、この手番の結果を単独で配信してからadvanceAndBroadcastに入る
     this.broadcastState();
+    // パスした状態を見せてから次に進む(bot分岐と同様の演出)
+    await sleep(PASS_DISPLAY_DELAY_MS);
+    if (!this.gameState || this.gameState.finished) return;
     await this.advanceAndBroadcast();
   }
 
-  private recordAction(seat: number, kind: ActionKind) {
+  private recordAction(seat: number, kind: ActionKind, fieldWasReset: boolean) {
     this.lastAction = { seat: seat as SeatId, kind };
+    this.lastClearedField = fieldWasReset && this.gameState ? this.gameState.lastClearedField : null;
   }
 
   private sendError(ws: WebSocket, code: ErrorCode) {

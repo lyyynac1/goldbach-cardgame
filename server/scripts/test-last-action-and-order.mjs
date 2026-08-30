@@ -85,9 +85,9 @@ check(
   "最初に届くstateは、場のカードがちょうど自分が出した枚数(botはまだ動いていない)",
   firstMsg.view.field.cards.length === lead.length
 );
-check("最初のstateはbotの800ms待機より前、ほぼ即座に届く(300ms未満)", firstArrivedAt - sentAt < 300);
+check("最初のstateはbotの3000ms待機より前、ほぼ即座に届く(300ms未満)", firstArrivedAt - sentAt < 300);
 
-// 2回目に届くstateはbot(seat1)の手のはず。1回目からBOT_MOVE_DELAY_MS(800ms)前後空くはず
+// 2回目に届くstateはbot(seat1)の手のはず。1回目からBOT_THINK_DELAY_MS(3000ms)前後空くはず
 const { msg: secondMsg, arrivedAt: secondArrivedAt } = await seat0.qs.nextOfType("state");
 check("2回目に届くstateのlastActionはbot(seat1)", secondMsg.view.lastAction?.seat === 1);
 check(

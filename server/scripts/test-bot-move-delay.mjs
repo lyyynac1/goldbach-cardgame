@@ -1,6 +1,6 @@
-// bot着手前の待機(BOT_MOVE_DELAY_MS=800ms)が実際に効いているかの検証。
-// 人間(seat0)が最初の1手を出した直後、連続するbotの手それぞれの間隔が
-// 800ms前後になっている(かつ0msの一括処理になっていない)ことを確認する。
+// bot着手前の待機(BOT_THINK_DELAY_MS=3000ms、クライアント側useGameSessionに合わせた値)
+// が実際に効いているかの検証。人間(seat0)が最初の1手を出した直後、連続するbotの手
+// それぞれの間隔が3000ms前後になっている(かつ0msの一括処理になっていない)ことを確認する。
 import WebSocket from "ws";
 
 let failures = 0;
@@ -96,8 +96,8 @@ for (let i = 1; i < timestamps.length; i++) {
 console.log("観測した手ごとの間隔(ms):", intervals);
 
 check(
-  "各stateの間隔がおおむね800ms前後(600ms以上)で、一括処理(0ms連発)になっていない",
-  intervals.every((ms) => ms >= 600)
+  "各stateの間隔がおおむね3000ms前後(2500ms以上)で、一括処理(0ms連発)になっていない",
+  intervals.every((ms) => ms >= 2500)
 );
 
 seat0.raw.close();
