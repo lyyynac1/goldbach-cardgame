@@ -7,15 +7,25 @@ export { GameRoom };
 
 export interface Env {
   GAME_ROOM: DurableObjectNamespace;
+  // ブラウザから直接叩かれるプレーンHTTPエンドポイント(POST /room など)向けのCORS許可オリジン。
+  // wrangler.jsonc の vars(環境ごとに env.<name>.vars で出し分け)から渡される。
+  // カンマ区切りで複数指定可。WebSocket(/room/<code>)自体はCORSの対象外(ブラウザが
+  // preflightを要求しない)なので対象外でよい。
+  ALLOWED_ORIGIN?: string;
 }
 
-// ブラウザから直接叩かれるプレーンHTTPエンドポイント(POST /room など)向けのCORS許可オリジン。
-// 開発中のクライアント(expo web, localhost:8081)を許可する。
-// WebSocket(/room/<code>)自体はCORSの対象外(ブラウザがpreflightを要求しない)なので対象外でよい。
-const ALLOWED_ORIGINS = new Set(["http://localhost:8081"]);
+function parseAllowedOrigins(env: Env): Set<string> {
+  const raw = env.ALLOWED_ORIGIN ?? "";
+  return new Set(
+    raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)
+  );
+}
 
-function corsHeaders(origin: string | null): HeadersInit {
-  if (!origin || !ALLOWED_ORIGINS.has(origin)) return {};
+function corsHeaders(origin: string | null, env: Env): HeadersInit {
+  if (!origin || !parseAllowedOrigins(env).has(origin)) return {};
   return {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -25,9 +35,9 @@ function corsHeaders(origin: string | null): HeadersInit {
 }
 
 /** プレーンHTTPレスポンスにCORSヘッダーを付け足す(WebSocketアップグレード応答には使わないこと)。 */
-function withCors(response: Response, origin: string | null): Response {
+function withCors(response: Response, origin: string | null, env: Env): Response {
   const headers = new Headers(response.headers);
-  for (const [k, v] of Object.entries(corsHeaders(origin))) headers.set(k, v);
+  for (const [k, v] of Object.entries(corsHeaders(origin, env))) headers.set(k, v);
   return new Response(response.body, { status: response.status, headers });
 }
 
@@ -63,7 +73,7 @@ export default {
 
     // ブラウザからのpreflightリクエスト(CORS)
     if (request.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: corsHeaders(origin) });
+      return new Response(null, { status: 204, headers: corsHeaders(origin, env) });
     }
 
     // POST /room — 部屋を新規作成し、生成した招待コードを返す。
@@ -75,14 +85,15 @@ export default {
       // このDOインスタンスを「作成済み」として記録する(/room/<code>側の存在確認で使う)
       const createResponse = await stub.fetch(new Request("https://internal/__create", { method: "POST" }));
       if (!createResponse.ok) {
-        return withCors(new Response("failed to create room", { status: 500 }), origin);
+        return withCors(new Response("failed to create room", { status: 500 }), origin, env);
       }
       return withCors(
         new Response(JSON.stringify({ code }), {
           status: 201,
           headers: { "content-type": "application/json" },
         }),
-        origin
+        origin,
+        env
       );
     }
 
@@ -103,10 +114,10 @@ export default {
     // /bench — 上級bot(maxN探索)の実行時間計測用ルート(タスク3)。ゲームロジックへの
     // 本接続ではなく、Workers実行環境上での純粋な計測のためだけの一時的なルート。
     if (url.pathname === "/bench") {
-      return withCors(handleBench(url), origin);
+      return withCors(handleBench(url), origin, env);
     }
 
-    return withCors(new Response("goldbach-server: not found", { status: 404 }), origin);
+    return withCors(new Response("goldbach-server: not found", { status: 404 }), origin, env);
   },
 };
 

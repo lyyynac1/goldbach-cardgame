@@ -3,6 +3,13 @@
   "name": "goldbach-server",
   "main": "src/index.ts",
   "compatibility_date": "2025-01-01",
+  // POST /room 等プレーンHTTPエンドポイントへのCORS許可オリジン。
+  // カンマ区切りで複数指定可(例: "https://a.example.com,https://b.example.com")。
+  // WebSocket(/room/<code>)自体はCORSの対象外なのでここには関係しない。
+  // これはデフォルト(wrangler devでのローカル開発用)の値。
+  "vars": {
+    "ALLOWED_ORIGIN": "http://localhost:8081"
+  },
   "durable_objects": {
     "bindings": [
       {
@@ -16,5 +23,15 @@
       "tag": "v1",
       "new_sqlite_classes": ["GameRoom"]
     }
-  ]
+  ],
+  "env": {
+    // 本番用。`wrangler deploy --env production` で使う想定(実行はAPIトークン
+    // 発行・方針確定後、こちらの判断で)。ALLOWED_ORIGINは、本番で配布する
+    // Web版のURLが確定した時点でここに書き足すだけでよい(コード変更不要)。
+    "production": {
+      "vars": {
+        "ALLOWED_ORIGIN": ""
+      }
+    }
+  }
 }
