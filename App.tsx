@@ -21,7 +21,8 @@ import { OnlineJoinScreen } from "./src/screens/OnlineJoinScreen";
 import { useOnlineRoom } from "./src/state/useOnlineRoom";
 import { OnlineGameScreen } from "./src/screens/OnlineGameScreen";
 import { OnlineResultScreen } from "./src/screens/OnlineResultScreen";
-import { PlayerConfig } from "./src/state/useGameSession";
+import { OnlineErrorScreen } from "./src/screens/OnlineErrorScreen";
+import { PlayerConfig, HUMAN_PLAYER_ID } from "./src/state/useGameSession";
 import { useTrophyEngine } from "./src/trophies/useTrophyEngine";
 import { Difficulty } from "./src/engine/bot";
 
@@ -33,6 +34,7 @@ type Screen =
   | { name: "online-lobby" }
   | { name: "online-join" }
   | { name: "online-game" }
+  | { name: "online-failed" }
   | { name: "game"; players: PlayerConfig[] };
 
 function Root() {
@@ -50,6 +52,14 @@ function Root() {
   const trophyEngine = useTrophyEngine();
   const room = useOnlineRoom();
   useEffect(() => {
+    if (room.status === "error" || room.status === "closed") {
+      // 対戦が正常に終わった場合は結果画面を出すので、ここでは飛ばさない
+      if (room.gameView?.finished) return;
+      if (screen.name.startsWith("online") && screen.name !== "online-failed") {
+        setScreen({ name: "online-failed" });
+      }
+      return;
+    }
     if (room.status === "playing") {
       if (screen.name !== "online-game") {
         setScreen({ name: "online-game" });
@@ -61,7 +71,7 @@ function Root() {
         setScreen({ name: "online-lobby" });
       }
     }
-  }, [room.status, screen.name]);
+  }, [room.status, room.gameView?.finished, screen.name]);
 
   if (screen.name === "home") {
     return (
@@ -118,6 +128,38 @@ function Root() {
         turnDeadline={room.turnDeadline}
         onAction={room.sendAction}
         onExit={() => {
+          room.leave();
+          setScreen({ name: "home" });
+        }}
+      />
+    );
+  }
+  if (screen.name === "online-failed") {
+    return (
+      <OnlineErrorScreen
+        reason={room.status === "error" ? "error" : "closed"}
+        message={room.errorMessage}
+        onSolo={() => {
+          room.leave();
+          setScreen({
+            name: "game",
+            players: [
+              {
+                id: HUMAN_PLAYER_ID,
+                name: "あなた",
+                isBot: false,
+                difficulty: "easy",
+              },
+              ...botDifficulties.map((d, i) => ({
+                id: i + 1,
+                name: `b${i + 1}`,
+                isBot: true,
+                difficulty: d,
+              })),
+            ],
+          });
+        }}
+        onBackToHome={() => {
           room.leave();
           setScreen({ name: "home" });
         }}
