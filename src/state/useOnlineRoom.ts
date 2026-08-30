@@ -21,6 +21,11 @@ export type FieldView = {
   lastPlayCount: number;
 };
 
+export type LastActionView = {
+  seat: number;
+  kind: number;
+};
+
 export type GameView = {
   selfSeat: number;
   selfHand: WireCard[];
@@ -29,6 +34,7 @@ export type GameView = {
   currentSeat: number;
   finished: boolean;
   winnerSeat: number | null;
+  lastAction: LastActionView | null;
   pendingAgariSeat: number | null;
 };
 

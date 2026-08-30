@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useTheme } from "../ThemeContext";
-import { FieldArea } from "../components/FieldArea";
+import { FieldArea, PlayAnimationInfo } from "../components/FieldArea";
 import { HandRow } from "../components/HandRow";
 import { ActionBar } from "../components/ActionBar";
 import { getLegalActions } from "../engine/rules";
@@ -112,6 +112,43 @@ export function OnlineGameScreen({
   );
 
   const canPass = legalActions.some((a) => a.type === "pass");
+  // 誰かが行動するたびにカードが飛んでくる演出を出す。
+  // nonce を変えることで、同じ方向からの連続の手でも再生される。
+  const nonceRef = useRef(0);
+  const [playAnimation, setPlayAnimation] = useState<PlayAnimationInfo | null>(
+    null,
+  );
+  const [passSeat, setPassSeat] = useState<number | null>(null);
+
+  useEffect(() => {
+    const last = view.lastAction;
+    if (!last) return;
+
+    // pass は場が変わらないので、代わりに文字で知らせる。
+    if (last.kind === WireActionKind.Pass) {
+      setPassSeat(last.seat);
+      const timer = setTimeout(() => setPassSeat(null), 1200);
+      return () => clearTimeout(timer);
+    }
+
+    nonceRef.current += 1;
+    const isSelf = last.seat === view.selfSeat;
+    const others = view.opponents.map((o) => o.seat);
+    const index = others.indexOf(last.seat);
+    const count = others.length;
+    const spread = 100;
+    const originX =
+      isSelf || count <= 1
+        ? 0
+        : (index - (count - 1) / 2) * (spread / Math.max(1, count - 1));
+
+    setPassSeat(null);
+    setPlayAnimation({
+      nonce: nonceRef.current,
+      originX,
+      originY: isSelf ? 130 : -130,
+    });
+  }, [view.lastAction, view.selfSeat, view.opponents]);
 
   const toggleCard = (card: Card) => {
     setSelected((prev) =>
@@ -192,10 +229,13 @@ export function OnlineGameScreen({
               >
                 {op.handCount}枚
               </Text>
-              {op.passed && (
+              {(op.passed || passSeat === op.seat) && (
                 <Text
                   style={{
-                    color: theme.colors.textSecondary,
+                    color:
+                      passSeat === op.seat
+                        ? theme.colors.accentGold
+                        : theme.colors.textSecondary,
                     fontFamily: theme.typography.body.fontFamily,
                     fontSize: 12,
                   }}
@@ -209,7 +249,11 @@ export function OnlineGameScreen({
       </View>
 
       <View style={styles.middleSection}>
-        <FieldArea field={field} clearedSnapshot={null} playAnimation={null} />
+        <FieldArea
+          field={field}
+          clearedSnapshot={null}
+          playAnimation={playAnimation}
+        />
       </View>
 
       <View style={styles.bottomSection}>
