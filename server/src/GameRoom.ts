@@ -2,7 +2,7 @@ import { ActionKind, ClientMessage, ErrorCode, LastActionView, SeatStatus, Serve
 import { validateClientMessage } from "./validation";
 import { buildRedactedView } from "./redactedView";
 import { ACTION_TYPE_TO_KIND, wireActionToAction } from "./wireConvert";
-import { Action, GameState } from "../../src/engine/types";
+import { Action, Card, GameState } from "../../src/engine/types";
 import { applyAction, forceSkipLead, initGame, resolveAgariDiscard } from "../../src/engine/engine";
 import { getLegalActions } from "../../src/engine/rules";
 import { chooseAction } from "../../src/engine/bot";
@@ -72,6 +72,10 @@ export class GameRoom {
   // 直前に誰が何をしたか(演出用: アニメーションの向き決定、パスの表示)。
   // forceSkipもクライアントにはPassとして見せる(見た目上は同じ「何もしなかった」なため)。
   private lastAction: LastActionView | null = null;
+
+  // 場を流した要因の手(残像表示用)。場がちょうど今流れた直後のみ値を持ち、
+  // それ以外は null にリセットする(「流れる直前の場」ではなく「流した張本人の手」)。
+  private lastClearedField: Card[] | null = null;
 
   // advanceAndBroadcastの多重実行防止。bot着手前にawaitで間を置くようになったため、
   // その待機中に切断イベント等で再度呼ばれても二重に進行しないようにするガード。
@@ -306,8 +310,9 @@ export class GameRoom {
     // 期限内にきちんと入力があったので、手番タイムアウトは解除する
     this.clearTurnTimeout();
 
-    this.gameState = applyAction(this.gameState, fromSeat, action).state;
-    this.recordAction(fromSeat, ACTION_TYPE_TO_KIND[action.type]);
+    const applyResult = applyAction(this.gameState, fromSeat, action);
+    this.gameState = applyResult.state;
+    this.recordAction(fromSeat, ACTION_TYPE_TO_KIND[action.type], applyResult.fieldWasReset);
     // 人間自身の手をまず単独で配信する。advanceAndBroadcastに直接入ると、続くbotの手
     // (800ms待機はさむが)と一緒くたに配信されてしまい、この手番の結果が画面に一切
     // 表示されないまま次のbotの手で場が上書きされて見える不具合があったため。
@@ -348,7 +353,7 @@ export class GameRoom {
           if (!this.gameState || this.gameState.finished) break;
           const skippedSeat = this.gameState.currentPlayerId;
           this.gameState = forceSkipLead(this.gameState);
-          this.recordAction(skippedSeat, ActionKind.Pass);
+          this.recordAction(skippedSeat, ActionKind.Pass, false); // forceSkipは元々場が空なので流したことにはならない
           this.broadcastState();
           continue;
         }
@@ -365,11 +370,12 @@ export class GameRoom {
           let wasPass: boolean;
           if (action === null) {
             this.gameState = forceSkipLead(this.gameState);
-            this.recordAction(seat, ActionKind.Pass);
+            this.recordAction(seat, ActionKind.Pass, false);
             wasPass = true;
           } else {
-            this.gameState = applyAction(this.gameState, seat, action).state;
-            this.recordAction(seat, ACTION_TYPE_TO_KIND[action.type]);
+            const applyResult = applyAction(this.gameState, seat, action);
+            this.gameState = applyResult.state;
+            this.recordAction(seat, ACTION_TYPE_TO_KIND[action.type], applyResult.fieldWasReset);
             wasPass = action.type === "pass";
           }
           this.broadcastState();
@@ -385,8 +391,9 @@ export class GameRoom {
         if (legal.length === 1 && legal[0].type === "pass") {
           await sleep(HUMAN_AUTO_PASS_DELAY_MS);
           if (!this.gameState || this.gameState.finished) break;
-          this.gameState = applyAction(this.gameState, seat, { type: "pass" }).state;
-          this.recordAction(seat, ActionKind.Pass);
+          const applyResult = applyAction(this.gameState, seat, { type: "pass" });
+          this.gameState = applyResult.state;
+          this.recordAction(seat, ActionKind.Pass, applyResult.fieldWasReset);
           this.broadcastState();
           continue;
         }
@@ -417,7 +424,7 @@ export class GameRoom {
     for (let seat = 0; seat < SEAT_COUNT; seat++) {
       const ws = this.seats[seat];
       if (!ws) continue;
-      const view = buildRedactedView(this.gameState, seat, this.lastAction);
+      const view = buildRedactedView(this.gameState, seat, this.lastAction, this.lastClearedField);
       const msg: ServerMessage = { type: "state", view };
       ws.send(JSON.stringify(msg));
     }
@@ -475,13 +482,16 @@ export class GameRoom {
     if (!player || player.isBot) return; // 既に切断でbot化されている等
 
     const legal = getLegalActions(this.gameState, seat);
+    let fieldWasReset = false;
     if (legal.some((a) => a.type === "pass")) {
-      this.gameState = applyAction(this.gameState, seat, { type: "pass" }).state;
+      const applyResult = applyAction(this.gameState, seat, { type: "pass" });
+      this.gameState = applyResult.state;
+      fieldWasReset = applyResult.fieldWasReset;
     } else {
       // 場が空(リード番)でpassという選択肢自体が無い場合は、強制スキップで次の人へ回す
       this.gameState = forceSkipLead(this.gameState);
     }
-    this.recordAction(seat, ActionKind.Pass);
+    this.recordAction(seat, ActionKind.Pass, fieldWasReset);
     // handleActionと同様、この手番の結果を単独で配信してからadvanceAndBroadcastに入る
     this.broadcastState();
     // パスした状態を見せてから次に進む(bot分岐と同様の演出)
@@ -490,8 +500,9 @@ export class GameRoom {
     await this.advanceAndBroadcast();
   }
 
-  private recordAction(seat: number, kind: ActionKind) {
+  private recordAction(seat: number, kind: ActionKind, fieldWasReset: boolean) {
     this.lastAction = { seat: seat as SeatId, kind };
+    this.lastClearedField = fieldWasReset && this.gameState ? this.gameState.lastClearedField : null;
   }
 
   private sendError(ws: WebSocket, code: ErrorCode) {

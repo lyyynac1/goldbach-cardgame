@@ -5,14 +5,15 @@
  * 場札(field.cards)は全員に公開されている情報なのでそのまま含める。
  * 手札を伏せる対象はあくまで各プレイヤーの hand のみ。
  */
-import { GameState } from "../../src/engine/types";
-import { FieldView, LastActionView, OpponentSeatView, RedactedGameStateView, SeatId } from "./protocol";
+import { Card, GameState } from "../../src/engine/types";
+import { FieldView, LastActionView, OpponentSeatView, RedactedGameStateView, SeatId, WireCard } from "./protocol";
 import { cardToWire } from "./wireConvert";
 
 export function buildRedactedView(
   state: GameState,
   forPlayerId: number,
-  lastAction: LastActionView | null
+  lastAction: LastActionView | null,
+  lastClearedField: Card[] | null
 ): RedactedGameStateView {
   const self = state.players.find((p) => p.id === forPlayerId);
   if (!self) {
@@ -46,5 +47,6 @@ export function buildRedactedView(
     winnerSeat: state.winnerId as SeatId | null,
     pendingAgariSeat: state.pendingAgari ? (state.pendingAgari.playerId as SeatId) : null,
     lastAction,
+    lastClearedField: lastClearedField ? lastClearedField.map(cardToWire) : null,
   };
 }

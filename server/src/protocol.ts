@@ -88,6 +88,12 @@ export interface RedactedGameStateView {
   winnerSeat: SeatId | null;
   pendingAgariSeat: SeatId | null;
   lastAction: LastActionView | null;
+  /**
+   * 場を流した要因の手(3枚の互いに素な組、公約数出しなど)。「流れる直前の場」ではなく
+   * 「場を流した張本人が出した手」。残像表示用。場がちょうど今流れた直後の配信でのみ
+   * 値を持ち、それ以外(場が流れていない通常の手番進行)は null。
+   */
+  lastClearedField: WireCard[] | null;
 }
 
 // ============================================================
