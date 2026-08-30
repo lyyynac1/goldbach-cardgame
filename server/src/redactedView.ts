@@ -13,7 +13,8 @@ export function buildRedactedView(
   state: GameState,
   forPlayerId: number,
   lastAction: LastActionView | null,
-  lastClearedField: Card[] | null
+  lastClearedField: Card[] | null,
+  seq: number
 ): RedactedGameStateView {
   const self = state.players.find((p) => p.id === forPlayerId);
   if (!self) {
@@ -48,5 +49,6 @@ export function buildRedactedView(
     pendingAgariSeat: state.pendingAgari ? (state.pendingAgari.playerId as SeatId) : null,
     lastAction,
     lastClearedField: lastClearedField ? lastClearedField.map(cardToWire) : null,
+    seq,
   };
 }
