@@ -150,6 +150,23 @@ export function OnlineGameScreen({
     });
   }, [view.lastAction, view.selfSeat, view.opponents]);
 
+  // 場が流れて空になった瞬間、直前の場札を一瞬だけ薄く残す。
+  // (ソロプレイの clearedFieldSnapshot と同じ演出。サーバーからは届かないので
+  //  クライアント側で「場が空になった」ことを検知して自前で保持する)
+  const prevFieldRef = useRef<Card[]>([]);
+  const [clearedSnapshot, setClearedSnapshot] = useState<Card[] | null>(null);
+
+  useEffect(() => {
+    const prev = prevFieldRef.current;
+    prevFieldRef.current = field.cards;
+
+    if (field.cards.length === 0 && prev.length > 0) {
+      setClearedSnapshot(prev);
+      const timer = setTimeout(() => setClearedSnapshot(null), 1200);
+      return () => clearTimeout(timer);
+    }
+  }, [field.cards]);
+
   const toggleCard = (card: Card) => {
     setSelected((prev) =>
       prev.some((c) => cardKey(c) === cardKey(card))
