@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { StatusBar } from "expo-status-bar";
 import * as SplashScreen from "expo-splash-screen";
 import { View } from "react-native";
@@ -15,31 +15,124 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ThemeProvider, useTheme } from "./src/ThemeContext";
 import { HomeScreen } from "./src/screens/HomeScreen";
 import { GameScreen } from "./src/screens/GameScreen";
+import { OnlineMenuScreen } from "./src/screens/OnlineMenuScreen";
+import { OnlineLobbyScreen } from "./src/screens/OnlineLobbyScreen";
+import { OnlineJoinScreen } from "./src/screens/OnlineJoinScreen";
+import { useOnlineRoom } from "./src/state/useOnlineRoom";
+import { OnlineGameScreen } from "./src/screens/OnlineGameScreen";
+import { OnlineResultScreen } from "./src/screens/OnlineResultScreen";
 import { PlayerConfig } from "./src/state/useGameSession";
 import { useTrophyEngine } from "./src/trophies/useTrophyEngine";
 import { Difficulty } from "./src/engine/bot";
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
-type Screen = { name: "home" } | { name: "game"; players: PlayerConfig[] };
+type Screen =
+  | { name: "home" }
+  | { name: "online-menu" }
+  | { name: "online-lobby" }
+  | { name: "online-join" }
+  | { name: "online-game" }
+  | { name: "game"; players: PlayerConfig[] };
 
 function Root() {
   const theme = useTheme();
   const [screen, setScreen] = useState<Screen>({ name: "home" });
   // アプリ全体でBot難度を保持する。ホーム→ゲーム→ホームの遷移でリセットされない
-  const [botDifficulties, setBotDifficulties] = useState<Difficulty[]>(["easy", "medium", "hard"]);
+  const [botDifficulties, setBotDifficulties] = useState<Difficulty[]>([
+    "easy",
+    "medium",
+    "hard",
+  ]);
   // HomeScreenとGameScreenがそれぞれ別のuseTrophyEngineインスタンスを持つと、
   // 片方で獲得したトロフィーがもう片方の画面(特にメニュー)に反映されないため、
   // ここで1つだけ生成して両方に渡すことで状態を確実に共有する。
   const trophyEngine = useTrophyEngine();
+  const room = useOnlineRoom();
+  useEffect(() => {
+    if (room.status === "playing") {
+      if (screen.name !== "online-game") {
+        setScreen({ name: "online-game" });
+      }
+      return;
+    }
+    if (room.status === "waiting") {
+      if (screen.name !== "online-lobby") {
+        setScreen({ name: "online-lobby" });
+      }
+    }
+  }, [room.status, screen.name]);
 
   if (screen.name === "home") {
     return (
       <HomeScreen
         onStart={(players) => setScreen({ name: "game", players })}
+        onOnline={() => setScreen({ name: "online-menu" })}
         trophyEngine={trophyEngine}
         botDifficulties={botDifficulties}
         onBotDifficultiesChange={setBotDifficulties}
+      />
+    );
+  }
+  if (screen.name === "online-menu") {
+    return (
+      <OnlineMenuScreen
+        onCreateRoom={() => room.createRoom()}
+        onJoinRoom={() => setScreen({ name: "online-join" })}
+        onBack={() => setScreen({ name: "home" })}
+      />
+    );
+  }
+  if (screen.name === "online-lobby") {
+    return (
+      <OnlineLobbyScreen
+        inviteCode={room.inviteCode}
+        connectedCount={room.connectedCount}
+        isHost={room.mySeat === 0}
+        onStart={() => room.start()}
+        onLeave={() => {
+          room.leave();
+          setScreen({ name: "online-menu" });
+        }}
+      />
+    );
+  }
+  if (screen.name === "online-game") {
+    if (!room.gameView) {
+      return null;
+    }
+    if (room.gameView.finished) {
+      return (
+        <OnlineResultScreen
+          view={room.gameView}
+          onBackToHome={() => {
+            room.leave();
+            setScreen({ name: "home" });
+          }}
+        />
+      );
+    }
+    return (
+      <OnlineGameScreen
+        view={room.gameView}
+        turnDeadline={room.turnDeadline}
+        onAction={room.sendAction}
+        onExit={() => {
+          room.leave();
+          setScreen({ name: "home" });
+        }}
+      />
+    );
+  }
+  if (screen.name === "online-join") {
+    return (
+      <OnlineJoinScreen
+        onJoin={(code) => room.joinRoom(code)}
+        onBack={() => {
+          room.leave();
+          setScreen({ name: "online-menu" });
+        }}
+        errorMessage={room.errorMessage}
       />
     );
   }

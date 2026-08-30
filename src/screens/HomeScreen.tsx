@@ -22,6 +22,7 @@ const DIFFICULTY_LABEL: Record<Difficulty, string> = {
 
 interface HomeScreenProps {
   onStart: (players: PlayerConfig[]) => void;
+  onOnline: () => void;
   trophyEngine: TrophyEngine;
   botDifficulties: Difficulty[];
   onBotDifficultiesChange: (difficulties: Difficulty[]) => void;
@@ -29,6 +30,7 @@ interface HomeScreenProps {
 
 export function HomeScreen({
   onStart,
+  onOnline,
   trophyEngine,
   botDifficulties,
   onBotDifficultiesChange,
@@ -149,10 +151,30 @@ export function HomeScreen({
             fontSize: 24,
           }}
         >
-          スタート
+          ひとりで遊ぶ
         </Text>
       </Pressable>
 
+      <Pressable
+        onPress={onOnline}
+        style={[
+          styles.onlineButton,
+          {
+            borderColor: theme.colors.border,
+            borderRadius: theme.radius.control,
+          },
+        ]}
+      >
+        <Text
+          style={{
+            color: theme.colors.textPrimary,
+            fontFamily: theme.typography.body.fontFamily,
+            fontSize: 24,
+          }}
+        >
+          みんなで遊ぶ
+        </Text>
+      </Pressable>
       <View style={styles.linkRow}>
         <Pressable
           onPress={() => setRulesVisible(true)}
@@ -277,6 +299,13 @@ const styles = StyleSheet.create({
     width: "100%",
     alignItems: "center",
     paddingVertical: 14,
+  },
+  onlineButton: {
+    width: "100%",
+    alignItems: "center",
+    paddingVertical: 14,
+    borderWidth: 1,
+    marginTop: 12,
   },
   rulesLink: {
     marginTop: 18,
