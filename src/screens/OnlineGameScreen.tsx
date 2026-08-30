@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useTheme } from "../ThemeContext";
@@ -17,6 +17,7 @@ import {
 
 type Props = {
   view: GameView;
+  turnDeadline: number | null;
   onAction: (action: WireAction) => void;
   onExit: () => void;
 };
@@ -54,9 +55,30 @@ function actionKindToWire(type: Action["type"]): number {
   }
 }
 
-export function OnlineGameScreen({ view, onAction, onExit }: Props) {
+export function OnlineGameScreen({
+  view,
+  turnDeadline,
+  onAction,
+  onExit,
+}: Props) {
   const theme = useTheme();
   const [selected, setSelected] = useState<Card[]>([]);
+  const [remainingSec, setRemainingSec] = useState<number | null>(null);
+
+  // 期限までの残り秒数を1秒ごとに更新する。
+  useEffect(() => {
+    if (turnDeadline === null) {
+      setRemainingSec(null);
+      return;
+    }
+    const tick = () => {
+      const left = Math.max(0, Math.ceil((turnDeadline - Date.now()) / 1000));
+      setRemainingSec(left);
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [turnDeadline]);
 
   const hand = useMemo(() => wireToCards(view.selfHand), [view.selfHand]);
   const field = useMemo(
@@ -191,6 +213,22 @@ export function OnlineGameScreen({ view, onAction, onExit }: Props) {
       </View>
 
       <View style={styles.bottomSection}>
+        {isMyTurn && remainingSec !== null && (
+          <Text
+            style={[
+              styles.timer,
+              {
+                color:
+                  remainingSec <= 10
+                    ? theme.colors.accentGoldStrong
+                    : theme.colors.textSecondary,
+                fontFamily: theme.typography.numeral.fontFamily,
+              },
+            ]}
+          >
+            のこり {remainingSec} 秒
+          </Text>
+        )}
         <HandRow
           hand={hand}
           selected={selected}
@@ -236,6 +274,11 @@ const styles = StyleSheet.create({
   middleSection: {
     flex: 1,
     justifyContent: "center",
+  },
+  timer: {
+    fontSize: 16,
+    textAlign: "center",
+    marginBottom: 6,
   },
   bottomSection: {},
 });

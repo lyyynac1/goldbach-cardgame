@@ -115,6 +115,7 @@ function Root() {
     return (
       <OnlineGameScreen
         view={room.gameView}
+        turnDeadline={room.turnDeadline}
         onAction={room.sendAction}
         onExit={() => {
           room.leave();

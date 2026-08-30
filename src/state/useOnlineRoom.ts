@@ -48,6 +48,7 @@ export type OnlineRoom = {
   connectedCount: number;
   seats: SeatStatus[];
   gameView: GameView | null;
+  turnDeadline: number | null;
   errorMessage: string | null;
   createRoom: () => Promise<void>;
   joinRoom: (code: string) => void;
@@ -63,6 +64,7 @@ export function useOnlineRoom(): OnlineRoom {
   const [connectedCount, setConnectedCount] = useState(0);
   const [seats, setSeats] = useState<SeatStatus[]>([]);
   const [gameView, setGameView] = useState<GameView | null>(null);
+  const [turnDeadline, setTurnDeadline] = useState<number | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -119,6 +121,9 @@ export function useOnlineRoom(): OnlineRoom {
             console.log("state", msg.view);
             setGameView(msg.view);
             setStatus("playing");
+            break;
+          case "turnDeadline":
+            setTurnDeadline(msg.deadlineAt);
             break;
           case "roomClosed":
             setStatus("closed");
@@ -185,6 +190,7 @@ export function useOnlineRoom(): OnlineRoom {
     setConnectedCount(0);
     setSeats([]);
     setGameView(null);
+    setTurnDeadline(null);
     setErrorMessage(null);
   }, [closeSocket]);
 
@@ -195,6 +201,7 @@ export function useOnlineRoom(): OnlineRoom {
     connectedCount,
     seats,
     gameView,
+    turnDeadline,
     errorMessage,
     createRoom,
     joinRoom,
