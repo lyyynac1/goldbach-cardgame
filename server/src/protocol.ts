@@ -94,6 +94,15 @@ export interface RedactedGameStateView {
    * 値を持ち、それ以外(場が流れていない通常の手番進行)は null。
    */
   lastClearedField: WireCard[] | null;
+  /**
+   * recordAction(=lastAction/lastClearedFieldの更新)が呼ばれるたびに+1される連番。
+   * 部屋の生成時は0。broadcastStateはrecordActionを伴わずに呼ばれることもある
+   * (入室に伴う再配信、対局中の切断→bot化がちょうど他人の手番中だった場合など)ため、
+   * lastAction/lastClearedFieldの中身だけでは「新しい出来事」か「同じ状態の再送」かを
+   * クライアント側で区別できない。seqが変化した場合のみ新しい出来事として演出を
+   * 発火させる想定。全座席に同じ値を配信する。
+   */
+  seq: number;
 }
 
 // ============================================================

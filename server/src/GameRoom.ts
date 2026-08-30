@@ -77,6 +77,11 @@ export class GameRoom {
   // それ以外は null にリセットする(「流れる直前の場」ではなく「流した張本人の手」)。
   private lastClearedField: Card[] | null = null;
 
+  // recordActionが呼ばれるたびに+1する連番。部屋の生成時は0。
+  // broadcastStateはrecordActionを伴わずに呼ばれることもあるため、
+  // クライアントが「新しい出来事」と「同じ状態の再送」を区別するために使う。
+  private seq = 0;
+
   // advanceAndBroadcastの多重実行防止。bot着手前にawaitで間を置くようになったため、
   // その待機中に切断イベント等で再度呼ばれても二重に進行しないようにするガード。
   private advancing = false;
@@ -424,7 +429,7 @@ export class GameRoom {
     for (let seat = 0; seat < SEAT_COUNT; seat++) {
       const ws = this.seats[seat];
       if (!ws) continue;
-      const view = buildRedactedView(this.gameState, seat, this.lastAction, this.lastClearedField);
+      const view = buildRedactedView(this.gameState, seat, this.lastAction, this.lastClearedField, this.seq);
       const msg: ServerMessage = { type: "state", view };
       ws.send(JSON.stringify(msg));
     }
@@ -503,6 +508,7 @@ export class GameRoom {
   private recordAction(seat: number, kind: ActionKind, fieldWasReset: boolean) {
     this.lastAction = { seat: seat as SeatId, kind };
     this.lastClearedField = fieldWasReset && this.gameState ? this.gameState.lastClearedField : null;
+    this.seq++;
   }
 
   private sendError(ws: WebSocket, code: ErrorCode) {
