@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { StatusBar } from "expo-status-bar";
 import * as SplashScreen from "expo-splash-screen";
 import { View } from "react-native";
@@ -51,10 +51,65 @@ function Root() {
   // ここで1つだけ生成して両方に渡すことで状態を確実に共有する。
   const trophyEngine = useTrophyEngine();
   const room = useOnlineRoom();
+
+  // 結果画面を出すまでの2秒遅延。finishedを検知した時点のgameViewを凍結して保持する。
+  // サーバーは対戦終了後に部屋を即時破棄するため、遅延中にroom.gameViewがnullになったり
+  // 接続がcloseしたりし得るが、その間も最終盤面を表示し続けるためにこの凍結が必要。
+  const RESULT_REVEAL_DELAY_MS = 800;
+  const [frozenView, setFrozenView] = useState<typeof room.gameView>(null);
+  const [showResult, setShowResult] = useState(false);
+  const [pendingResult, setPendingResult] = useState(false);
+  const [clearedActive, setClearedActive] = useState(false);
+  const finishedHandledRef = useRef(false);
+  const resultTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (room.gameView?.finished && !finishedHandledRef.current) {
+      finishedHandledRef.current = true;
+      setFrozenView(room.gameView);
+      setPendingResult(true);
+    }
+  }, [room.gameView]);
+
+  // 残像表示中は結果画面への切り替えを待つ。残像が消えた(clearedActiveがfalseになった)
+  // 時点でタイマーを開始する。残像自体が出ていなければ即座に開始される。
+  useEffect(() => {
+    if (pendingResult && !clearedActive) {
+      resultTimerRef.current = setTimeout(
+        () => setShowResult(true),
+        RESULT_REVEAL_DELAY_MS,
+      );
+      return () => {
+        if (resultTimerRef.current) clearTimeout(resultTimerRef.current);
+      };
+    }
+  }, [pendingResult, clearedActive]);
+
+  // アンマウント時のみタイマーを掃除する。room.gameViewの変化のたびに
+  // クリーンアップが走ると、finished後の追加配信(recordActionを伴わない
+  // 保険的な再配信)でタイマーが誤ってキャンセルされてしまうため、
+  // 依存配列を分離している。
+  useEffect(() => {
+    return () => {
+      if (resultTimerRef.current) clearTimeout(resultTimerRef.current);
+    };
+  }, []);
+
+  // 再戦や新規部屋でロビーに戻ったら状態をリセットする
+  useEffect(() => {
+    if (room.status === "waiting") {
+      finishedHandledRef.current = false;
+      setShowResult(false);
+      setFrozenView(null);
+      setPendingResult(false);
+      setClearedActive(false);
+    }
+  }, [room.status]);
+
   useEffect(() => {
     if (room.status === "error" || room.status === "closed") {
       // 対戦が正常に終わった場合は結果画面を出すので、ここでは飛ばさない
-      if (room.gameView?.finished) return;
+      if (room.gameView?.finished || finishedHandledRef.current) return;
       if (screen.name.startsWith("online") && screen.name !== "online-failed") {
         setScreen({ name: "online-failed" });
       }
@@ -108,13 +163,14 @@ function Root() {
     );
   }
   if (screen.name === "online-game") {
-    if (!room.gameView) {
+    const view = frozenView ?? room.gameView;
+    if (!view) {
       return null;
     }
-    if (room.gameView.finished) {
+    if (showResult) {
       return (
         <OnlineResultScreen
-          view={room.gameView}
+          view={view}
           onBackToHome={() => {
             room.leave();
             setScreen({ name: "home" });
@@ -124,9 +180,10 @@ function Root() {
     }
     return (
       <OnlineGameScreen
-        view={room.gameView}
+        view={view}
         turnDeadline={room.turnDeadline}
         onAction={room.sendAction}
+        onClearedSnapshotActive={setClearedActive}
         onExit={() => {
           room.leave();
           setScreen({ name: "home" });

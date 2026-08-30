@@ -138,7 +138,6 @@ export function useOnlineRoom(): OnlineRoom {
             setStatus("closed");
             break;
           case "error":
-            console.log("server error:", msg.code);
             setErrorMessage(`エラーが発生しました (${msg.code})`);
             break;
         }

@@ -20,6 +20,7 @@ type Props = {
   turnDeadline: number | null;
   onAction: (action: WireAction) => void;
   onExit: () => void;
+  onClearedSnapshotActive?: (active: boolean) => void;
 };
 
 function cardKey(c: Card): string {
@@ -60,6 +61,7 @@ export function OnlineGameScreen({
   turnDeadline,
   onAction,
   onExit,
+  onClearedSnapshotActive,
 }: Props) {
   const theme = useTheme();
   const [selected, setSelected] = useState<Card[]>([]);
@@ -154,6 +156,8 @@ export function OnlineGameScreen({
   // 「場を流した張本人が出した手」(サーバーの lastClearedField)。
   // seq が増えたときだけ新しい出来事として扱う。同じ state の再配信
   // (入室・切断→bot化など)では seq が変化しないので再発火しない。
+  // 残像の表示中/非表示は onClearedSnapshotActive で親に伝え、あがり直後の
+  // 結果画面遷移がこの演出と重ならないようにする。
   const prevSeqRef = useRef<number>(-1);
   const [clearedSnapshot, setClearedSnapshot] = useState<Card[] | null>(null);
   useEffect(() => {
@@ -161,7 +165,11 @@ export function OnlineGameScreen({
     prevSeqRef.current = view.seq;
     if (!view.lastClearedField || view.lastClearedField.length === 0) return;
     setClearedSnapshot(wireToCards(view.lastClearedField));
-    const timer = setTimeout(() => setClearedSnapshot(null), 1200);
+    onClearedSnapshotActive?.(true);
+    const timer = setTimeout(() => {
+      setClearedSnapshot(null);
+      onClearedSnapshotActive?.(false);
+    }, 1200);
     return () => clearTimeout(timer);
   }, [view.seq, view.lastClearedField]);
 
