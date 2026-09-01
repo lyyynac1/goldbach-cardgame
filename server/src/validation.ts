@@ -93,6 +93,9 @@ export function validateClientMessage(raw: unknown): ValidationResult<ClientMess
     case "startRequest":
       return ok({ type: "startRequest" });
 
+    case "rematchVote":
+      return ok({ type: "rematchVote" });
+
     case "ping": {
       if (typeof raw.nonce !== "number" || !Number.isFinite(raw.nonce) || raw.nonce < 0 || raw.nonce > MAX_NONCE) {
         return reject(ErrorCode.OutOfRangeValue);

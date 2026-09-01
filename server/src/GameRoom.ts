@@ -90,6 +90,16 @@ export class GameRoom {
   // 残っている最も若い席へ自動的に昇格する(そうしないと誰も対戦を開始できなくなるため)。
   private hostSeat: SeatId = 0;
 
+  // ソケットの座席番号(0-3) → エンジンのプレイヤーID(0-3) の対応。対局開始のたびに
+  // シャッフルし直す(先手・手番順をランダム化するため)。GameState内の識別子は
+  // 全てエンジンID側なので、クライアントへ送るあらゆる座席番号はこれを通して
+  // ソケット座席番号に変換する(buildRedactedView/turnDeadline等)。
+  // 初期値は恒等写像。
+  private seatToPlayerId: SeatId[] = [0, 1, 2, 3];
+
+  // 再戦の同意状況。ソケットの座席番号ベース。finished済みの部屋でのみ意味を持つ。
+  private rematchVotes: Set<SeatId> = new Set();
+
   // 人間の手番タイムアウト用。待機中に新しいタイマーへ置き換わっていないかを
   // トークンで判定する(clearTimeoutだけだと非同期コールバック内での判定が難しいため)。
   private turnTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
@@ -208,9 +218,13 @@ export class GameRoom {
       this.broadcastSeatUpdate();
 
       // 対局中にこの席が人間だった場合、再接続の猶予は設けず即座にbot化して進行を止めない
-      const player = this.gameState?.players.find((p) => p.id === seat);
+      const enginePlayerId = this.gameState ? this.seatToPlayerId[seat] : null;
+      const player =
+        this.gameState && enginePlayerId !== null
+          ? this.gameState.players.find((p) => p.id === enginePlayerId)
+          : undefined;
       if (this.gameState && !this.gameState.finished && player && !player.isBot) {
-        if (this.gameState.currentPlayerId === seat) {
+        if (this.gameState.currentPlayerId === enginePlayerId) {
           // この席の手番タイムアウトが仕掛かっていたなら、即座にbot化するので不要になった
           this.clearTurnTimeout();
         }
@@ -218,11 +232,18 @@ export class GameRoom {
         // ここも既存のstateを直接書き換えず、players配列だけ新しく作り直す
         this.gameState = {
           ...this.gameState,
-          players: this.gameState.players.map((p) => (p.id === seat ? { ...p, isBot: true } : p)),
+          players: this.gameState.players.map((p) => (p.id === enginePlayerId ? { ...p, isBot: true } : p)),
         };
         // advanceAndBroadcast が state を再配信するので、残った人間には
         // opponents[].isBot の更新として自然に伝わる
         await this.advanceAndBroadcast();
+      }
+
+      // 対局後(finished済み)に誰か抜けた場合、必要な同意数が変わるので再戦判定を
+      // 再チェックする(既に揃っていた人数が減って全員同意扱いになるケースに対応)。
+      if (this.gameState?.finished) {
+        this.broadcastRematchStatus();
+        await this.checkRematchConsensus();
       }
     };
     ws.addEventListener("close", cleanup);
@@ -255,6 +276,11 @@ export class GameRoom {
         await this.handleAction(fromSeat, ws, msg.action);
         return;
       }
+
+      case "rematchVote": {
+        await this.handleRematchVote(fromSeat, ws);
+        return;
+      }
     }
   }
 
@@ -267,17 +293,79 @@ export class GameRoom {
       this.sendError(ws, ErrorCode.GameAlreadyStarted);
       return;
     }
+    await this.startGame();
+  }
 
-    // この時点で人間が接続していない席はbotにする(要件2、難易度は固定でhard)
-    this.gameState = initGame(
-      Array.from({ length: SEAT_COUNT }, (_, i) => ({
-        name: `seat${i}`,
-        isBot: this.seats[i] === null,
-      })),
-      0
-    );
+  /** 機能1: 再戦。finished済みの部屋でのみ有効。接続中の人間全員の同意で自動的に再戦を開始する。 */
+  private async handleRematchVote(fromSeat: SeatId, ws: WebSocket) {
+    if (!this.gameState || !this.gameState.finished) {
+      this.sendError(ws, ErrorCode.GameNotFinished);
+      return;
+    }
+    this.rematchVotes.add(fromSeat);
+    this.broadcastRematchStatus();
+    await this.checkRematchConsensus();
+  }
+
+  /** 現在ソケットが繋がっている座席のみを「必要な同意数」とする(bot席・退出済みの席は数えない)。 */
+  private requiredRematchSeats(): SeatId[] {
+    const required: SeatId[] = [];
+    for (let s = 0; s < SEAT_COUNT; s++) {
+      if (this.seats[s] !== null) required.push(s as SeatId);
+    }
+    return required;
+  }
+
+  private broadcastRematchStatus() {
+    const agreedSeats = Array.from(this.rematchVotes).sort((a, b) => a - b);
+    const requiredSeats = this.requiredRematchSeats();
+    this.broadcast({ type: "rematchStatus", agreedSeats, requiredSeats });
+  }
+
+  /** 必要な座席が全員同意していたら、投票をクリアして再戦(=新しい対局)を開始する。 */
+  private async checkRematchConsensus() {
+    if (!this.gameState || !this.gameState.finished) return;
+    const required = this.requiredRematchSeats();
+    if (required.length === 0) return; // 通常はここに来る前にdestroyRoom側で処理される
+    const allAgreed = required.every((s) => this.rematchVotes.has(s));
+    if (!allAgreed) return;
+
+    this.rematchVotes.clear();
+    // gameEndGrace用に設定されていたAlarmを、通常のidle Alarmへ戻す
+    await this.bumpIdleAlarm();
+    await this.startGame();
+  }
+
+  /**
+   * プレイ順をシャッフルしたうえで initGame する。新規の対局開始・再戦の両方から呼ばれる。
+   * この時点で人間が接続していない席はbotにする(要件2、難易度は固定でhard)。
+   */
+  private async startGame() {
+    this.shufflePlayOrder();
+
+    const players: { name: string; isBot: boolean }[] = new Array(SEAT_COUNT);
+    for (let socketSeat = 0; socketSeat < SEAT_COUNT; socketSeat++) {
+      const engineId = this.seatToPlayerId[socketSeat];
+      players[engineId] = { name: `seat${socketSeat}`, isBot: this.seats[socketSeat] === null };
+    }
+
+    this.gameState = initGame(players, 0);
+    this.lastAction = null;
+    this.lastClearedField = null;
+    this.rematchVotes.clear();
+    this.seq++; // 新しい対局の開始も「新しい出来事」としてクライアントに認識させる
 
     await this.advanceAndBroadcast();
+  }
+
+  /** 座席(ソケット)→エンジンのプレイヤーIDの対応を0-3のランダムな並び替えで更新する。 */
+  private shufflePlayOrder() {
+    const ids: SeatId[] = [0, 1, 2, 3];
+    for (let i = ids.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [ids[i], ids[j]] = [ids[j], ids[i]];
+    }
+    this.seatToPlayerId = ids;
   }
 
   private async handleAction(fromSeat: SeatId, ws: WebSocket, wireAction: WireAction) {
@@ -285,11 +373,13 @@ export class GameRoom {
       this.sendError(ws, ErrorCode.GameNotStarted);
       return;
     }
-    if (this.gameState.currentPlayerId !== fromSeat) {
+    // ソケットの座席番号をエンジンのプレイヤーIDへ変換する(シャッフルされているため)
+    const enginePlayerId = this.seatToPlayerId[fromSeat];
+    if (this.gameState.currentPlayerId !== enginePlayerId) {
       this.sendError(ws, ErrorCode.NotYourTurn);
       return;
     }
-    if (this.gameState.players.find((p) => p.id === fromSeat)?.isBot) {
+    if (this.gameState.players.find((p) => p.id === enginePlayerId)?.isBot) {
       // bot席から人間のactionが届くことは正規のクライアントでは起こらない
       this.sendError(ws, ErrorCode.NotYourTurn);
       return;
@@ -304,7 +394,7 @@ export class GameRoom {
     }
 
     // 要件3: getLegalActionsで合法手か検証したうえでapplyActionを適用する
-    const legal = getLegalActions(this.gameState, fromSeat);
+    const legal = getLegalActions(this.gameState, enginePlayerId);
     const isLegal = legal.some((a) => JSON.stringify(a) === JSON.stringify(action));
     if (!isLegal) {
       // 形式は正しいが今の場では出せない手。形式不正ではないので切断はしない。
@@ -315,9 +405,9 @@ export class GameRoom {
     // 期限内にきちんと入力があったので、手番タイムアウトは解除する
     this.clearTurnTimeout();
 
-    const applyResult = applyAction(this.gameState, fromSeat, action);
+    const applyResult = applyAction(this.gameState, enginePlayerId, action);
     this.gameState = applyResult.state;
-    this.recordAction(fromSeat, ACTION_TYPE_TO_KIND[action.type], applyResult.fieldWasReset);
+    this.recordAction(enginePlayerId, ACTION_TYPE_TO_KIND[action.type], applyResult.fieldWasReset);
     // 人間自身の手をまず単独で配信する。advanceAndBroadcastに直接入ると、続くbotの手
     // (800ms待機はさむが)と一緒くたに配信されてしまい、この手番の結果が画面に一切
     // 表示されないまま次のbotの手で場が上書きされて見える不具合があったため。
@@ -429,7 +519,14 @@ export class GameRoom {
     for (let seat = 0; seat < SEAT_COUNT; seat++) {
       const ws = this.seats[seat];
       if (!ws) continue;
-      const view = buildRedactedView(this.gameState, seat, this.lastAction, this.lastClearedField, this.seq);
+      const view = buildRedactedView(
+        this.gameState,
+        seat as SeatId,
+        this.seatToPlayerId,
+        this.lastAction,
+        this.lastClearedField,
+        this.seq
+      );
       const msg: ServerMessage = { type: "state", view };
       ws.send(JSON.stringify(msg));
     }
@@ -456,14 +553,16 @@ export class GameRoom {
    * (残り時間表示用)。期限までにactionが届かなければ handleTurnTimeout が自動でパス相当の
    * 処理をする。
    */
-  private scheduleTurnTimeout(seat: SeatId) {
+  private scheduleTurnTimeout(enginePlayerId: SeatId) {
     this.clearTurnTimeout();
     const myToken = this.turnTimeoutToken;
     const deadlineAt = Date.now() + this.turnTimeoutMs;
-    this.broadcast({ type: "turnDeadline", seat, deadlineAt });
+    // クライアントはソケット座席で自分を識別しているため、変換してから送る
+    const socketSeat = this.seatToPlayerId.indexOf(enginePlayerId) as SeatId;
+    this.broadcast({ type: "turnDeadline", seat: socketSeat, deadlineAt });
 
     this.turnTimeoutHandle = setTimeout(() => {
-      void this.handleTurnTimeout(seat, myToken);
+      void this.handleTurnTimeout(enginePlayerId, myToken);
     }, this.turnTimeoutMs);
   }
 
@@ -479,24 +578,24 @@ export class GameRoom {
     this.turnTimeoutToken++;
   }
 
-  private async handleTurnTimeout(seat: SeatId, token: number) {
+  private async handleTurnTimeout(enginePlayerId: SeatId, token: number) {
     if (token !== this.turnTimeoutToken) return; // 既に解除/上書きされた古いタイマー
     if (!this.gameState || this.gameState.finished) return;
-    if (this.gameState.currentPlayerId !== seat) return;
-    const player = this.gameState.players.find((p) => p.id === seat);
+    if (this.gameState.currentPlayerId !== enginePlayerId) return;
+    const player = this.gameState.players.find((p) => p.id === enginePlayerId);
     if (!player || player.isBot) return; // 既に切断でbot化されている等
 
-    const legal = getLegalActions(this.gameState, seat);
+    const legal = getLegalActions(this.gameState, enginePlayerId);
     let fieldWasReset = false;
     if (legal.some((a) => a.type === "pass")) {
-      const applyResult = applyAction(this.gameState, seat, { type: "pass" });
+      const applyResult = applyAction(this.gameState, enginePlayerId, { type: "pass" });
       this.gameState = applyResult.state;
       fieldWasReset = applyResult.fieldWasReset;
     } else {
       // 場が空(リード番)でpassという選択肢自体が無い場合は、強制スキップで次の人へ回す
       this.gameState = forceSkipLead(this.gameState);
     }
-    this.recordAction(seat, ActionKind.Pass, fieldWasReset);
+    this.recordAction(enginePlayerId, ActionKind.Pass, fieldWasReset);
     // handleActionと同様、この手番の結果を単独で配信してからadvanceAndBroadcastに入る
     this.broadcastState();
     // パスした状態を見せてから次に進む(bot分岐と同様の演出)
@@ -558,6 +657,7 @@ export class GameRoom {
     this.seats = Array.from({ length: SEAT_COUNT }, () => null);
     this.gameState = null;
     this.created = false;
+    this.rematchVotes.clear();
     await this.state.storage.deleteAll();
   }
 }

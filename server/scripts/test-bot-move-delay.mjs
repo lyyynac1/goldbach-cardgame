@@ -62,22 +62,32 @@ function pickLeadCards(hand) {
   return null;
 }
 
-const createRes = await fetch("http://localhost:8787/room", { method: "POST" });
-const { code } = await createRes.json();
+// プレイ順は対局開始のたびにシャッフルされ、seat0が最初の手番とは限らない。
+// seat0が最初の手番になるまで部屋を作り直す(確率1/4、30回試せば外れる確率は無視できるほど小さい)。
+let seat0;
+let initial;
+for (let attempt = 0; attempt < 30; attempt++) {
+  const createRes = await fetch("http://localhost:8787/room", { method: "POST" });
+  const { code } = await createRes.json();
+  const s = await connect(code);
+  s.qs.send({ type: "startRequest" });
+  const { msg: initialMsg } = await s.qs.nextOfType("state");
+  if (initialMsg.view.currentSeat === 0) {
+    seat0 = s;
+    initial = initialMsg.view;
+    break;
+  }
+  s.raw.close();
+}
+if (!seat0) {
+  console.log("FAIL: 30回試してもseat0が最初の手番にならなかった(シャッフルの偏り、要調査)");
+  process.exit(1);
+}
 
-const seat0 = await connect(code);
-seat0.qs.send({ type: "startRequest" });
-const { msg: initialMsg } = await seat0.qs.nextOfType("state");
-const initial = initialMsg.view;
-
-// seat0がリード番であれば1手出し、以後は完全にbot(seat1-3)だけが連続で手番を回す状況を作る
-if (initial.currentSeat === 0) {
+// seat0からリードを1手出し、以後は完全にbot(seat1-3)だけが連続で手番を回す状況を作る
+{
   const lead = pickLeadCards(initial.selfHand);
   seat0.qs.send({ type: "action", action: { kind: 0, cards: lead } });
-} else {
-  console.log("(seat0がリード番でなかったため、この検証はスキップ)");
-  seat0.raw.close();
-  process.exit(0);
 }
 
 // 以後、seat0からのactionは送らず(pass等もしない)、botの手番だけが連続するのを観察する。

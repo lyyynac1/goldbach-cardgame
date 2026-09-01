@@ -63,13 +63,27 @@ function pickLeadCards(hand) {
   return null;
 }
 
-const createRes = await fetch("http://localhost:8787/room", { method: "POST" });
-const { code } = await createRes.json();
-
-const seat0 = await connect(code);
-seat0.qs.send({ type: "startRequest" });
-const { msg: initialMsg } = await seat0.qs.nextOfType("state");
-const initial = initialMsg.view;
+// プレイ順は対局開始のたびにシャッフルされ、seat0が最初の手番とは限らない。
+// seat0が最初の手番になるまで部屋を作り直す(確率1/4、30回試せば外れる確率は無視できるほど小さい)。
+let seat0;
+let initial;
+for (let attempt = 0; attempt < 30; attempt++) {
+  const createRes = await fetch("http://localhost:8787/room", { method: "POST" });
+  const { code } = await createRes.json();
+  const s = await connect(code);
+  s.qs.send({ type: "startRequest" });
+  const { msg: initialMsg } = await s.qs.nextOfType("state");
+  if (initialMsg.view.currentSeat === 0) {
+    seat0 = s;
+    initial = initialMsg.view;
+    break;
+  }
+  s.raw.close();
+}
+if (!seat0) {
+  console.log("FAIL: 30回試してもseat0が最初の手番にならなかった(シャッフルの偏り、要調査)");
+  process.exit(1);
+}
 
 check("ゲーム開始直後、lastActionはnull", initial.lastAction === null);
 
@@ -87,9 +101,15 @@ check(
 );
 check("最初のstateはbotの3000ms待機より前、ほぼ即座に届く(300ms未満)", firstArrivedAt - sentAt < 300);
 
-// 2回目に届くstateはbot(seat1)の手のはず。1回目からBOT_THINK_DELAY_MS(3000ms)前後空くはず
+// 2回目に届くstateは、1回目の時点でのcurrentSeat(=次の手番、シャッフルにより
+// どの座席かは毎回変わる)のbotが打った手のはず。BOT_THINK_DELAY_MS(3000ms)前後空くはず
+const nextBotSeat = firstMsg.view.currentSeat;
 const { msg: secondMsg, arrivedAt: secondArrivedAt } = await seat0.qs.nextOfType("state");
-check("2回目に届くstateのlastActionはbot(seat1)", secondMsg.view.lastAction?.seat === 1);
+check("2回目に届くstateのlastActionは自分以外", secondMsg.view.lastAction?.seat !== 0);
+check(
+  "2回目に届くstateのlastActionは、1回目時点で手番だった座席と一致する",
+  secondMsg.view.lastAction?.seat === nextBotSeat
+);
 check(
   "1回目と2回目のstateの間隔が600ms以上空いている(一緒くたに配信されていない証拠)",
   secondArrivedAt - firstArrivedAt >= 600

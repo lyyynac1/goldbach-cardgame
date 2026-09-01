@@ -21,7 +21,8 @@ state = applyAction(state, 0, firstLegal).state;
 const realHand0 = state.players.find((p) => p.id === 0)!.hand;
 const realHand1 = state.players.find((p) => p.id === 1)!.hand;
 
-const viewFor0 = buildRedactedView(state, 0, { seat: 0, kind: 0 }, null, 1);
+const identitySeatMap = [0, 1, 2, 3] as const;
+const viewFor0 = buildRedactedView(state, 0, identitySeatMap, { seat: 0, kind: 0 }, null, 1);
 
 check("selfSeatが要求したプレイヤーIDと一致する", viewFor0.selfSeat === 0);
 check("selfHandの枚数が実際の手札枚数と一致する", viewFor0.selfHand.length === realHand0.length);

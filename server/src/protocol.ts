@@ -120,6 +120,7 @@ export const enum ErrorCode {
   NotHost = 8, // ホスト以外がstartRequestを送った(ホストは最初は座席0、以後は入退室で変わりうる)
   GameNotStarted = 9, // 対戦開始前にactionを送った
   GameAlreadyStarted = 10, // 開始済みの部屋にstartRequestを送った
+  GameNotFinished = 11, // 対戦がまだ終了していないのにrematchVoteを送った
 }
 
 // ============================================================
@@ -140,6 +141,7 @@ export type ClientMessage =
   | { type: "joinRequest" } // WebSocket接続確立後、最初に送る。ペイロードなし(招待コードは接続先URLで既に特定済み)
   | { type: "startRequest" } // ホストのみ有効(seatUpdateのhostを参照)。空席はbotで埋めて対戦を開始する
   | { type: "action"; action: WireAction }
+  | { type: "rematchVote" } // 対戦終了後(finished済み)の部屋でのみ有効。全員分揃うと自動的に再戦が始まる
   | { type: "ping"; nonce: number };
 
 // ============================================================
@@ -155,6 +157,10 @@ export type ServerMessage =
   // 人間の手番が始まったことの通知。deadlineAtまでにactionが届かなければ
   // サーバー側で自動的にパス相当の処理をする(タイムアウト)。bot席の手番では送らない。
   | { type: "turnDeadline"; seat: SeatId; deadlineAt: number }
+  // rematchVoteを受けるたび、および入退室で必要人数が変わるたびに全席へ配信。
+  // agreedSeats: 現在同意している席。requiredSeats: 現在接続中の(人間の)席全員。
+  // requiredSeatsがagreedSeatsに全て含まれた時点でサーバー側が自動的に再戦を開始する。
+  | { type: "rematchStatus"; agreedSeats: SeatId[]; requiredSeats: SeatId[] }
   | { type: "error"; code: ErrorCode } // 形式不正の場合は送信元がこの直後に切断される。IllegalAction/NotYourTurn等は切断しない
   | { type: "roomClosed"; code: ErrorCode }
   | { type: "pong"; nonce: number };
