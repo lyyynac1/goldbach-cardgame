@@ -1,14 +1,22 @@
 import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useTheme } from "../ThemeContext";
-import { GameView } from "../state/useOnlineRoom";
-
+import { GameView, RematchStatus } from "../state/useOnlineRoom";
 type Props = {
   view: GameView;
   onBackToHome: () => void;
+  onVoteRematch: () => void;
+  rematchStatus: RematchStatus | null;
+  hasVotedRematch: boolean;
 };
 
-export function OnlineResultScreen({ view, onBackToHome }: Props) {
+export function OnlineResultScreen({
+  view,
+  onBackToHome,
+  onVoteRematch,
+  rematchStatus,
+  hasVotedRematch,
+}: Props) {
   const theme = useTheme();
 
   const isWinner = view.winnerSeat === view.selfSeat;
@@ -115,21 +123,63 @@ export function OnlineResultScreen({ view, onBackToHome }: Props) {
         ))}
       </View>
 
+      {rematchStatus && rematchStatus.requiredSeats.length > 0 && (
+        <Text
+          style={{
+            color: theme.colors.textSecondary,
+            fontFamily: theme.typography.body.fontFamily,
+            fontSize: 14,
+            marginBottom: 14,
+          }}
+        >
+          {rematchStatus.agreedSeats.length}/
+          {rematchStatus.requiredSeats.length}
+          人が同意しています
+        </Text>
+      )}
+
       <Pressable
-        onPress={onBackToHome}
+        onPress={onVoteRematch}
+        disabled={hasVotedRematch}
         style={[
           styles.mainButton,
           {
-            backgroundColor: theme.colors.accentGold,
+            backgroundColor: hasVotedRematch
+              ? theme.colors.border
+              : theme.colors.accentGold,
+            borderRadius: theme.radius.control,
+            marginBottom: 14,
+          },
+        ]}
+      >
+        <Text
+          style={{
+            color: hasVotedRematch
+              ? theme.colors.textSecondary
+              : theme.colors.onAccentGold,
+            fontFamily: theme.typography.body.fontFamily,
+            fontSize: 22,
+          }}
+        >
+          {hasVotedRematch ? "同意しました" : "もう一度プレイ"}
+        </Text>
+      </Pressable>
+
+      <Pressable
+        onPress={onBackToHome}
+        style={[
+          styles.secondaryButton,
+          {
+            borderColor: theme.colors.border,
             borderRadius: theme.radius.control,
           },
         ]}
       >
         <Text
           style={{
-            color: theme.colors.onAccentGold,
+            color: theme.colors.textPrimary,
             fontFamily: theme.typography.body.fontFamily,
-            fontSize: 22,
+            fontSize: 18,
           }}
         >
           ホームにもどる
@@ -173,5 +223,11 @@ const styles = StyleSheet.create({
     width: "100%",
     alignItems: "center",
     paddingVertical: 14,
+  },
+  secondaryButton: {
+    width: "100%",
+    alignItems: "center",
+    paddingVertical: 12,
+    borderWidth: 1,
   },
 });

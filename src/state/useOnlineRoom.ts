@@ -41,6 +41,11 @@ export type GameView = {
   seq: number;
 };
 
+export type RematchStatus = {
+  agreedSeats: number[];
+  requiredSeats: number[];
+};
+
 export type RoomStatus =
   | "idle"
   | "creating"
@@ -59,10 +64,12 @@ export type OnlineRoom = {
   gameView: GameView | null;
   turnDeadline: number | null;
   errorMessage: string | null;
+  rematchStatus: RematchStatus | null;
   createRoom: () => Promise<void>;
   joinRoom: (code: string) => void;
   start: () => void;
   sendAction: (action: WireAction) => void;
+  voteRematch: () => void;
   leave: () => void;
 };
 
@@ -75,6 +82,9 @@ export function useOnlineRoom(): OnlineRoom {
   const [gameView, setGameView] = useState<GameView | null>(null);
   const [turnDeadline, setTurnDeadline] = useState<number | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [rematchStatus, setRematchStatus] = useState<RematchStatus | null>(
+    null,
+  );
 
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -130,6 +140,15 @@ export function useOnlineRoom(): OnlineRoom {
             console.log("state", msg.view);
             setGameView(msg.view);
             setStatus("playing");
+            if (msg.view.finished === false) {
+              setRematchStatus(null);
+            }
+            break;
+          case "rematchStatus":
+            setRematchStatus({
+              agreedSeats: msg.agreedSeats ?? [],
+              requiredSeats: msg.requiredSeats ?? [],
+            });
             break;
           case "turnDeadline":
             setTurnDeadline(msg.deadlineAt);
@@ -190,6 +209,10 @@ export function useOnlineRoom(): OnlineRoom {
     wsRef.current?.send(JSON.stringify({ type: "action", action }));
   }, []);
 
+  const voteRematch = useCallback(() => {
+    wsRef.current?.send(JSON.stringify({ type: "rematchVote" }));
+  }, []);
+
   const leave = useCallback(() => {
     closeSocket();
     setStatus("idle");
@@ -200,6 +223,7 @@ export function useOnlineRoom(): OnlineRoom {
     setGameView(null);
     setTurnDeadline(null);
     setErrorMessage(null);
+    setRematchStatus(null);
   }, [closeSocket]);
 
   return {
@@ -211,10 +235,12 @@ export function useOnlineRoom(): OnlineRoom {
     gameView,
     turnDeadline,
     errorMessage,
+    rematchStatus,
     createRoom,
     joinRoom,
     start,
     sendAction,
+    voteRematch,
     leave,
   };
 }

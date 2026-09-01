@@ -60,6 +60,7 @@ function Root() {
   const [showResult, setShowResult] = useState(false);
   const [pendingResult, setPendingResult] = useState(false);
   const [clearedActive, setClearedActive] = useState(false);
+  const [hasVotedRematch, setHasVotedRematch] = useState(false);
   const finishedHandledRef = useRef(false);
   const resultTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -68,6 +69,21 @@ function Root() {
       finishedHandledRef.current = true;
       setFrozenView(room.gameView);
       setPendingResult(true);
+    }
+  }, [room.gameView]);
+
+  useEffect(() => {
+    if (
+      room.gameView &&
+      !room.gameView.finished &&
+      finishedHandledRef.current
+    ) {
+      finishedHandledRef.current = false;
+      setShowResult(false);
+      setFrozenView(null);
+      setPendingResult(false);
+      setClearedActive(false);
+      setHasVotedRematch(false);
     }
   }, [room.gameView]);
 
@@ -103,6 +119,7 @@ function Root() {
       setFrozenView(null);
       setPendingResult(false);
       setClearedActive(false);
+      setHasVotedRematch(false);
     }
   }, [room.status]);
 
@@ -175,6 +192,12 @@ function Root() {
             room.leave();
             setScreen({ name: "home" });
           }}
+          onVoteRematch={() => {
+            setHasVotedRematch(true);
+            room.voteRematch();
+          }}
+          rematchStatus={room.rematchStatus}
+          hasVotedRematch={hasVotedRematch}
         />
       );
     }
