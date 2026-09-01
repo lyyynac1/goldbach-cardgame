@@ -170,9 +170,14 @@ export function OnlineGameScreen({
       setClearedSnapshot(null);
       onClearedSnapshotActive?.(false);
     }, 1200);
-    return () => clearTimeout(timer);
+    // 次の配信でこのeffectが再実行されると、上のタイマーはキャンセルされる。
+    // そのときフラグを戻す担当がいなくなり、clearedActiveがtrueのまま固定されて
+    // 結果画面へ遷移できなくなるため、クリーンアップ側でも必ず戻す。
+    return () => {
+      clearTimeout(timer);
+      onClearedSnapshotActive?.(false);
+    };
   }, [view.seq, view.lastClearedField]);
-
   const toggleCard = (card: Card) => {
     setSelected((prev) =>
       prev.some((c) => cardKey(c) === cardKey(card))
