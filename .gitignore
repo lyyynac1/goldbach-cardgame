@@ -37,5 +37,9 @@ Thumbs.db
 *.jks
 keystore.properties
 
-.claude/worktrees/
+# Claude Code関連の開発用設定・コンテキストファイル。
+# ローカルには残すが、公開リポジトリ上には表示しない。
+.claude/
+CLAUDE.md
+
 .env.local
