@@ -1,15 +1,14 @@
-[README.md](https://github.com/user-attachments/files/30680917/README.md)
 # ゴールドバッハ
 
-数論をテーマにした1人用カードゲームです。ジョーカーを抜いた52枚のトランプを使い、素数がゲームのルールにの根幹をなしています。
+数論をテーマにしたカードゲームです。ジョーカーを抜いた52枚のトランプを使い、素数がゲームのルールの根幹をなしています。
 
-ブラウザで動作します。詳細は後記を参照ください。
+bot 3体と対戦する1人用モードと、招待コードで友達と遊べるオンライン対戦モードがあります。ブラウザ（Web版）とAndroidアプリ（APK）の両方で動作します。詳細は後記を参照ください。
 
 ---
 
 ## ゲームの概要
 
-1人のユーザーと3体のbot（b1・b2・b3）が3ゲームを1セットとして対戦します。以下これらを総称してプレイヤーと称します。
+1人のユーザーと3体のbot（b1・b2・b3）が3ゲームを1セットとして対戦します（1人用モード）。以下これらを総称してプレイヤーと称します。基本ルールは、後述のオンライン対戦（友達と最大4人）でも共通です。
 
 ### 用語
 
@@ -47,7 +46,7 @@
 
 ---
 ## その他の機能
-以上のルールのもと、このブラウザゲームは以下の機能を備えて運営されます。
+以上のルールのもと、本ゲームは以下の機能を備えて運営されます。
 
 
 ### bot性能
@@ -55,6 +54,11 @@
 - **初級** - 手番ごとに合法手があればそのうちランダムに1つを実行し、なければただパスをする。ゲームルールを理解してまもないニュービーが対象。
 - **中級** - 1手に出す札の多さやターン奪取の可否、残す手札の質や次の手番プレイヤーの最善手にあがり手をすべて評価し、能動的なパスも視野に入れて評価値の最も高い選択を採る。ルールに馴れて駆け引きを楽しむいっぱしのプレイヤーが対象。
 - **上級** - 中級と同様の観点で評価された上位10パターンの候補手について、maxN法を用いて6手先までシミュレーションする。この上で、自分の暫定順位によって目指すあがり方を動的に変える。セットを俯瞰し大局的な勝ちをつかむ強者が対象。
+
+### オンライン対戦
+ホーム画面から部屋を作成すると8桁の招待コードが発行され、それを共有した相手が入室することで最大4人（人間+bot）で対戦できます。部屋を立てた人（ホスト）が対戦を開始し、開始時点で空いている席は上級botが自動的に埋めます。
+
+対戦終了後は「再戦」に投票でき、その場にいる人間全員が同意すると、ロビーを経由せず自動的に次の対局（プレイ順は毎回シャッフル）が始まります。通信が切れた席は即座にbotに引き継がれ、対局が止まらないようになっています。
 
 ### 記録
 勝利したゲーム・セット数が記録されます。
@@ -93,12 +97,35 @@ npx expo start --web
 ### Web版をビルドする
 
 ```bash
-npm run build: web
+npm run build:web
 ```
 
 `dist/` に出力されます。Cloudflare Pages などの静的ホスティングにそのままデプロイできます。
 
+### Android版（APK）をビルドする
+
+```bash
+npm run build:android
+```
+
+`expo prebuild` でネイティブプロジェクト（`android/`、gitには含まれません）を生成した上でGradleビルドを行い、`android/app/build/outputs/apk/` にAPKが出力されます。JDK・Android SDKのセットアップが別途必要です。
+
+### オンライン対戦サーバーをローカルで動かす
+
+```bash
+cd server
+npm install
+npm run dev
+```
+
+Cloudflare Workers（`wrangler dev`）がローカルで起動し、デフォルトで`ws://localhost:8787`に接続できます。本番サーバーに接続する場合は`.env.production`の`EXPO_PUBLIC_SERVER_ORIGIN`を参照してください。
+
 ### テストを実行する
+
+```bash
+npm test
+```
+
 botのロジックを調整するために設けたもので、AIに大量に試させる内容になっています。ローカルで実行するとえらく時間がかかります。
 
 ### 対応ブラウザ
@@ -113,18 +140,19 @@ botのロジックを調整するために設けたもので、AIに大量に試
 ---
 
 ## プロジェクト構成
-開発段階ではapkファイル化を検討していたので、それに伴うコメントや冗長な表現を多分に含みます。現在私たちの中では廃止されており、機能として死んだものとなっているはずです。公開プロジェクトとしてはそれらを削除しきれなかったことを心苦しく思っていますが、ご容赦ください。
 
 ```
 goldbach-cardgame/
-├── App.tsx                    # ルートコンポーネント。ナビゲーションと難度設定の状態管理
+├── App.tsx                    # ルートコンポーネント。画面遷移・結果画面表示タイミングの状態管理
 ├── index.ts                   # Expo エントリポイント
-├── app.json                   # Expo 設定（アプリ名・バージョン・ダークモード）
+├── app.json                   # Expo 設定（アプリ名・バージョン・Androidパッケージ名など）
 ├── package.json               # 依存関係・スクリプト定義
 ├── tsconfig.json              # TypeScript 設定
+├── .env.production            # 本番ビルド時の接続先サーバーURL(EXPO_PUBLIC_SERVER_ORIGIN)
 │
-├── assets/
-│   └── favicon.png            # ブラウザタブ用ファビコン
+├── assets/                    # アイコン・ファビコンなどの画像
+├── plugins/
+│   └── withReleaseSigning.js  # Android リリース署名を自動設定する Expo config plugin
 │
 ├── __mocks__/
 │   └── expo-audio.js          # テスト用モック
@@ -142,18 +170,29 @@ goldbach-cardgame/
 │   ├── ThemeContext.tsx        # ダークモードのコンテキスト
 │   ├── theme.ts               # ライト/ダーク両モードのカラーパレット
 │   │
-│   ├── engine/
+│   ├── engine/                # 1人用・オンライン対戦共通のゲームルール本体
 │   │   ├── types.ts           # ゲームの型定義
 │   │   ├── mathUtils.ts       # GCD・素数判定・互いに素判定
 │   │   ├── rules.ts           # カード出しの合法手判定
 │   │   ├── engine.ts          # ゲーム進行・ターン管理・勝敗判定
-│   │   ├── bot.ts             # ボットの行動選択
-│   │   └── counterHeuristic.ts
+│   │   ├── bot.ts             # ボットの行動選択（難易度別）
+│   │   └── counterHeuristic.ts # 上級botの「返されにくいリード」評価
 │   │
 │   ├── screens/
-│   │   ├── HomeScreen.tsx     # タイトル・難度設定画面
-│   │   ├── GameScreen.tsx     # ゲームプレイ画面
-│   │   └── SetSummaryScreen.tsx
+│   │   ├── HomeScreen.tsx         # タイトル・難度設定・1人用orオンラインの選択
+│   │   ├── GameScreen.tsx         # 1人用の対戦画面
+│   │   ├── SetSummaryScreen.tsx   # 1人用のセット結果画面
+│   │   ├── OnlineMenuScreen.tsx   # オンライン対戦: 部屋作成/参加コード入力への入口
+│   │   ├── OnlineJoinScreen.tsx   # オンライン対戦: 招待コード入力画面
+│   │   ├── OnlineLobbyScreen.tsx  # オンライン対戦: 開始前の座席待機画面
+│   │   ├── OnlineGameScreen.tsx   # オンライン対戦: 対戦画面
+│   │   ├── OnlineResultScreen.tsx # オンライン対戦: 結果・再戦投票画面
+│   │   └── OnlineErrorScreen.tsx  # オンライン対戦: 切断・接続失敗時の画面
+│   │
+│   ├── state/
+│   │   ├── useGameSession.ts  # 1人用の対局進行・状態管理 Hook
+│   │   ├── useOnlineRoom.ts   # オンライン対戦のWebSocket接続・状態管理 Hook
+│   │   └── wireCard.ts        # クライアント側の通信用カード表現の変換
 │   │
 │   ├── components/
 │   │   ├── ActionBar.tsx      # カード選択・出す操作
@@ -161,9 +200,11 @@ goldbach-cardgame/
 │   │   ├── HandRow.tsx        # プレイヤー手札の表示
 │   │   ├── OpponentRow.tsx    # 対戦相手の手札枚数表示
 │   │   ├── TopBar.tsx         # スコア・ゲーム進捗
+│   │   ├── UserScoreDisplay.tsx
 │   │   ├── RoundSummaryOverlay.tsx
 │   │   ├── RulesModal.tsx     # ルール説明モーダル
 │   │   ├── ColumnModal.tsx    # 数論コラムのモーダル
+│   │   ├── CreditsModal.tsx   # クレジット表示
 │   │   ├── TrophyListModal.tsx
 │   │   └── TrophyUnlockToast.tsx
 │   │
@@ -180,13 +221,22 @@ goldbach-cardgame/
 │   │   ├── trophyStore.ts        # AsyncStorage による永続化
 │   │   └── useTrophyEngine.ts    # トロフィー判定 Hook
 │   │
-│   ├── state/
-│   │   └── useGameSession.ts  # セッション状態管理 Hook
-│   │
 │   └── content/
-│       └── columnContent.ts   # コラム記事のテキストコンテンツ
+│       ├── columnContent.ts   # コラム記事のテキストコンテンツ
+│       └── creditsContent.ts  # クレジット画面の表示内容
 │
-├── CLAUDE.md                  # Claude向けプロジェクトコンテキスト
+├── server/                    # オンライン対戦バックエンド(Cloudflare Workers + Durable Objects)
+│   ├── src/
+│   │   ├── index.ts           # HTTPエントリポイント(部屋作成・CORS)
+│   │   ├── GameRoom.ts        # 部屋ごとの対局進行を管理するDurable Object本体
+│   │   ├── protocol.ts        # クライアント⇔サーバーの通信メッセージ型
+│   │   ├── validation.ts      # 受信メッセージの形式・値域チェック
+│   │   ├── redactedView.ts    # 各プレイヤー視点(手札を伏せた)ビューの生成
+│   │   └── wireConvert.ts     # 内部のCard/Action⇔通信用数値表現の変換
+│   └── scripts/                # サーバーの結合テスト(wrangler devに対してWebSocketで実際に対戦させる)
+│
+├── android/                    # `expo prebuild`で生成されるネイティブプロジェクト(.gitignore対象・非コミット)
+│
 ├── ICON_AND_THEME_GUIDE.md    # アイコン・テーマカスタマイズガイド
 ├── THEME_COLORS.md            # ダークモードのカラーパレット詳細
 └── LICENSE
