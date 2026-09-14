@@ -12,7 +12,6 @@ import { useTheme } from "../ThemeContext";
 import { GITHUB_REPO_URL } from "../content/columnContent";
 import {
   APP_VERSION,
-  MEMBERS,
   OSS_LICENSES,
   TEAM_NAME,
   TERMS_SECTIONS,
@@ -112,20 +111,6 @@ export function CreditsModal({
             >
               {TEAM_NAME}
             </Text>
-            {MEMBERS.map((name, i) => (
-              <Text
-                key={i}
-                style={[
-                  styles.memberName,
-                  {
-                    color: theme.colors.textSecondary,
-                    fontFamily: theme.typography.body.fontFamily,
-                  },
-                ]}
-              >
-                {name}
-              </Text>
-            ))}
           </View>
 
           {/* 利用条件・免責事項など */}
@@ -303,10 +288,6 @@ const styles = StyleSheet.create({
   teamName: {
     fontSize: 22,
     marginBottom: 6,
-  },
-  memberName: {
-    fontSize: 20,
-    lineHeight: 28,
   },
   ossItem: {
     borderBottomWidth: 0.5,
