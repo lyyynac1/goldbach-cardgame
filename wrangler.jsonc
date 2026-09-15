@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Web版本体(npm run build:web の出力 dist/)を静的アセットとして配信するWorker。
+  // Cloudflare Pagesは使わない(APIトークンにPages編集権限が無いため)。
+  // Workers Static Assetsなら通信対戦サーバー(server/)と同じ権限で配信できる。
+  // APKファイルもビルド後にdist/へコピーして同梱し、同じ配信物からダウンロードできるようにする。
+  "name": "play",
+  "compatibility_date": "2025-01-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}

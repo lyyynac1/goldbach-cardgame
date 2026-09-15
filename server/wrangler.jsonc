@@ -25,12 +25,22 @@
     }
   ],
   "env": {
-    // 本番用。`wrangler deploy --env production` で使う想定(実行はAPIトークン
-    // 発行・方針確定後、こちらの判断で)。ALLOWED_ORIGINは、本番で配布する
-    // Web版のURLが確定した時点でここに書き足すだけでよい(コード変更不要)。
+    // 本番用。`wrangler deploy --env production` で使う。
+    // name を明示的に指定しないと `<base name>-production` になってしまうため、
+    // ここで公開用のWorker名(cardgame)を上書きする。
     "production": {
+      "name": "cardgame",
       "vars": {
-        "ALLOWED_ORIGIN": ""
+        "ALLOWED_ORIGIN": "https://play.goldbach.workers.dev"
+      },
+      // durable_objects はenvironmentに自動継承されないため明示的に複製する。
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "GAME_ROOM",
+            "class_name": "GameRoom"
+          }
+        ]
       }
     }
   }
